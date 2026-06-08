@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(node _gen.mjs)",
+      "Bash(node --check src/data/seed.js)",
+      "Bash(node --check src/data/rules.js)",
+      "Bash(node --check src/logic/timetable.js)",
+      "mcp__Claude_Preview__preview_start",
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(git add *)"
+    ]
+  }
+}
