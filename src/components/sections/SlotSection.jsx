@@ -1,23 +1,24 @@
 import { useMemo, useState } from 'react'
-import { Info, ChevronDown, CircleAlert } from 'lucide-react'
+import { Info, ChevronDown, CircleAlert, Grid3x3, Search } from 'lucide-react'
 import { useApp } from '../../store/AppContext.jsx'
-import { TERM, PREV_YEAR, slotLabel, slotSystems, facultyPreferences } from '../../data/seed.js'
-import { matchesFilter, progress, pastSlotSystem } from '../../logic/timetable.js'
-import CourseFilters from '../CourseFilters.jsx'
+import { TERM, PREV_YEAR, slotLabel, slotSystems, facultyPreferences, cohorts } from '../../data/seed.js'
+import { progress, pastSlotSystem } from '../../logic/timetable.js'
 import SlotSystemPanel from '../SlotSystemPanel.jsx'
 import SlotPicker from '../SlotPicker.jsx'
 import SectionHeader from './SectionHeader.jsx'
 import MarkDoneButton from './MarkDoneButton.jsx'
 import StatusFilter from './StatusFilter.jsx'
 
-// Step 3 — slot allotment. Each course card carries the two signals the planner
-// slots against: the slot SYSTEM it ran in last year, and any availability
-// preferences its faculty have submitted (blocked weeks). A slotting-type
-// selector records the chosen system (hover an option for its timing); the
-// "View slotting types" panel opens alongside to explain each system in full.
+// Step 3 — slot allotment. The list view is filtered by BATCH tag chips (BDes 1
+// / BDes 2 / … / All) and a search box. Clicking a course card SELECTS it — the
+// course you're allotting carries a yellow highlight. Each card carries the slot
+// SYSTEM it ran in last year and any faculty availability preferences; a
+// slotting-type selector reveals the week picker (and a "Grid" button that opens
+// the batch's week grid in a state-synced tab).
 export default function SlotSection() {
-  const { courses, workflow, setStepDone } = useApp()
-  const [filter, setFilter] = useState({ program: '', sub: '', query: '' })
+  const { courses, workflow, setStepDone, selectedCourseId, setSelectedCourse } = useApp()
+  const [cohortTag, setCohortTag] = useState('all')
+  const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all') // all | allotted | unallotted
   const [guideOpen, setGuideOpen] = useState(false)
   const [choice, setChoice] = useState({}) // course id -> chosen slotting system
@@ -26,15 +27,22 @@ export default function SlotSection() {
   const stat = progress(courses).slot
   const complete = stat.done === stat.total
   const stepDone = workflow.slotFinalised
-  const q = filter.query.trim().toLowerCase()
+  const q = query.trim().toLowerCase()
+
+  // Batch tags: "All" + every cohort that actually has courses, in seed order.
+  const batchTags = useMemo(
+    () => ['all', ...cohorts.filter((co) => courses.some((c) => c.cohort === co))],
+    [courses],
+  )
+
   const list = useMemo(
     () =>
       courses.filter(
         (c) =>
-          matchesFilter(c, filter.program, filter.sub) &&
+          (cohortTag === 'all' || c.cohort === cohortTag) &&
           (!q || c.code.toLowerCase().includes(q) || c.title.toLowerCase().includes(q)),
       ),
-    [courses, filter, q],
+    [courses, cohortTag, q],
   )
   const allottedCount = list.filter(isAllotted).length
   const counts = { all: list.length, allotted: allottedCount, unallotted: list.length - allottedCount }
@@ -85,7 +93,37 @@ export default function SlotSection() {
       <div className="mt-5 flex items-start gap-6">
         {/* Left: filters + course cards */}
         <div className="min-w-0 flex-1">
-          <CourseFilters value={filter} onChange={setFilter} />
+          {/* Batch tag filters + search */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {batchTags.map((t) => {
+                const selected = cohortTag === t
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setCohortTag(t)}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                      selected
+                        ? 'bg-accent text-white'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    {t === 'all' ? 'All batches' : t}
+                  </button>
+                )
+              })}
+            </div>
+            <div className="ml-auto flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+              <Search size={15} className="text-slate-400" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search for a course code or name"
+                className="w-60 bg-transparent text-sm outline-none placeholder:text-slate-400"
+              />
+            </div>
+          </div>
+
           <div className="mt-4 flex items-center justify-between">
             <StatusFilter value={status} onChange={setStatus} counts={counts} />
             <span className="text-xs text-slate-400">
@@ -100,11 +138,17 @@ export default function SlotSection() {
               const prefs = c.faculty
                 .map((f) => (facultyPreferences[f] ? { faculty: f, ...facultyPreferences[f] } : null))
                 .filter(Boolean)
-              const pastSlots = c.slots.length ? c.slots.map(slotLabel).join(', ') : '—'
+              const pastSlots = c.prevSlots?.length ? c.prevSlots.map(slotLabel).join(', ') : '—'
+              const isSelected = selectedCourseId === c.id
               return (
                 <div
                   key={c.id}
-                  className="rounded-2xl border border-slate-200 bg-white px-5 py-4 transition hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900"
+                  onClick={() => setSelectedCourse(c.id)}
+                  className={`cursor-pointer rounded-2xl border bg-white px-5 py-4 transition dark:bg-slate-900 ${
+                    isSelected
+                      ? 'border-amber-400 ring-2 ring-amber-300 dark:border-amber-500 dark:ring-amber-700'
+                      : 'border-slate-200 hover:border-slate-300 dark:border-slate-800'
+                  }`}
                 >
                   <div className="flex items-center gap-5">
                     <div className="min-w-0 flex-[1.4]">
@@ -117,7 +161,8 @@ export default function SlotSection() {
                         {c.title}
                       </div>
                       <div className="mt-0.5 truncate text-xs text-slate-400">
-                        To be taught by: {c.faculty.length ? c.faculty.join(' & ') : 'unassigned'}
+                        {c.cohort} · To be taught by:{' '}
+                        {c.faculty.length ? c.faculty.join(' & ') : 'unassigned'}
                       </div>
                     </div>
 
@@ -149,8 +194,28 @@ export default function SlotSection() {
                         </div>
                       </div>
 
-                      {/* Slots picker — appears once a system is chosen */}
-                      {sys && <SlotPicker course={c} system={slotSystems.find((s) => s.id === sys)} />}
+                      {/* Slots picker + direct-manipulation grid — appear once a
+                          system is chosen. The grid opens the batch's week-grid in
+                          a new, state-synced tab. */}
+                      {sys && (
+                        <div className="flex items-end gap-2">
+                          <SlotPicker course={c} />
+                          <button
+                            onClick={() =>
+                              window.open(
+                                `/slot-grid?cohort=${encodeURIComponent(c.cohort)}&focus=${encodeURIComponent(
+                                  c.id,
+                                )}&system=${sys}`,
+                                '_blank',
+                              )
+                            }
+                            title={`Open the ${c.cohort} week grid in a new tab — edits sync live`}
+                            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                          >
+                            <Grid3x3 size={14} /> Grid
+                          </button>
+                        </div>
+                      )}
                     </div>
 
                     {/* Last-year reference */}

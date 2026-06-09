@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useReducer } from 'react'
+import { createContext, useContext, useEffect, useMemo, useReducer, useRef } from 'react'
 import {
   courses as seedCourses,
   changeRequests as seedRequests,
@@ -9,9 +9,15 @@ import { applyOp, detectConflicts } from '../logic/timetable.js'
 const AppContext = createContext(null)
 
 const initialState = {
-  courses: seedCourses,
+  // Slot allotment starts EMPTY: no course has weeks by default. Last year's
+  // slots are kept on `prevSlots` purely as an on-screen reference.
+  courses: seedCourses.map((c) => ({ ...c, prevSlots: c.slots, slots: [] })),
   changeRequests: seedRequests,
   sharedAccess: seedShared,
+  // The course currently being allotted (highlighted in the list, focused in the
+  // grid). Synced across tabs so switching course in the planner switches it in
+  // the grid too.
+  selectedCourseId: null,
   workflow: {
     // Each step is unlocked only after the previous one is explicitly marked done.
     coursesFinalised: false,
@@ -143,6 +149,15 @@ function baseReducer(state, action) {
     case 'SET_THEME':
       return { ...state, theme: action.theme }
 
+    case 'SET_SELECTED_COURSE':
+      return { ...state, selectedCourseId: action.id }
+
+    // Replace the shared slice with state mirrored from another browser tab
+    // (see the BroadcastChannel sync in AppProvider). Not undoable, and never
+    // re-broadcast (the `applyingRemote` guard suppresses the echo).
+    case 'HYDRATE':
+      return { ...state, ...action.payload }
+
     default:
       return state
   }
@@ -157,6 +172,72 @@ export function AppProvider({ children }) {
     if (state.theme === 'dark') root.classList.add('dark')
     else root.classList.remove('dark')
   }, [state.theme])
+
+  // --- Cross-tab sync (BroadcastChannel) ----------------------------------
+  // The slot-grid editor opens in a SEPARATE browser tab; each tab runs its own
+  // store. We mirror the shared slice (courses / change requests / workflow /
+  // access) across tabs so a slot edit in either surface shows up in the other.
+  // A freshly opened tab asks already-open tabs for the current state (the
+  // channel does not replay past messages), and every local change is broadcast
+  // as a patch. `applyingRemote` stops a remote-applied change from echoing back.
+  const channelRef = useRef(null)
+  const applyingRemote = useRef(false)
+  const skipFirstBroadcast = useRef(true)
+  const stateRef = useRef(state)
+  stateRef.current = state
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return
+    const slice = (s) => ({
+      courses: s.courses,
+      changeRequests: s.changeRequests,
+      workflow: s.workflow,
+      sharedAccess: s.sharedAccess,
+      selectedCourseId: s.selectedCourseId,
+    })
+    const ch = new BroadcastChannel('timetable-sync')
+    channelRef.current = ch
+    ch.onmessage = (e) => {
+      const msg = e.data
+      if (!msg || !msg.type) return
+      if (msg.type === 'REQUEST_STATE') {
+        ch.postMessage({ type: 'FULL_STATE', payload: slice(stateRef.current) })
+      } else if (msg.type === 'FULL_STATE' || msg.type === 'PATCH') {
+        applyingRemote.current = true
+        dispatch({ type: 'HYDRATE', payload: msg.payload })
+      }
+    }
+    // Catch up to any tab that's already open.
+    ch.postMessage({ type: 'REQUEST_STATE' })
+    return () => {
+      ch.close()
+      channelRef.current = null
+    }
+  }, [])
+
+  // Broadcast every local change to the other tabs — skipping the initial mount
+  // (so a new tab never clobbers others with its seed state) and any change we
+  // ourselves just applied from a remote message.
+  useEffect(() => {
+    if (skipFirstBroadcast.current) {
+      skipFirstBroadcast.current = false
+      return
+    }
+    if (applyingRemote.current) {
+      applyingRemote.current = false
+      return
+    }
+    channelRef.current?.postMessage({
+      type: 'PATCH',
+      payload: {
+        courses: state.courses,
+        changeRequests: state.changeRequests,
+        workflow: state.workflow,
+        sharedAccess: state.sharedAccess,
+        selectedCourseId: state.selectedCourseId,
+      },
+    })
+  }, [state.courses, state.changeRequests, state.workflow, state.sharedAccess, state.selectedCourseId])
 
   // Derived: live conflict analysis over the current courses.
   const conflicts = useMemo(() => detectConflicts(state.courses), [state.courses])
@@ -176,6 +257,7 @@ export function AppProvider({ children }) {
       updateCourses: (courses) => dispatch({ type: 'UPDATE_COURSES', courses }),
       finaliseCourses: () => dispatch({ type: 'FINALISE_COURSES' }),
       setStepDone: (step, value) => dispatch({ type: 'SET_STEP_DONE', step, value }),
+      setSelectedCourse: (id) => dispatch({ type: 'SET_SELECTED_COURSE', id }),
       removeCourse: (id) => dispatch({ type: 'REMOVE_COURSE', id }),
       addCourse: (course) => dispatch({ type: 'ADD_COURSE', course }),
       generate: () => dispatch({ type: 'GENERATE' }),

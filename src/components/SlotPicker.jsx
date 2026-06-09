@@ -1,35 +1,22 @@
 import { useState, useRef, useEffect } from 'react'
-import { ChevronDown, Check, Star, CircleAlert } from 'lucide-react'
+import { ChevronDown, Check, CircleAlert, Lock } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
-import { slots as allSlots, slotsSpan, facultyPreferences } from '../data/seed.js'
+import { slots as allSlots, slotLabel, slotDateRange, facultyPreferences } from '../data/seed.js'
+import { isProtected } from '../data/rules.js'
 
-// Consecutive `duration`-week blocks drawn from the teaching weeks. W8 (the
-// mid-sem break) splits contiguity, so no block straddles it. Each block is one
-// selectable "slot" — e.g. a 3-week course offers W1–W3, W2–W4, …
-function weekBlocks(duration) {
-  const d = Math.max(1, duration)
-  const runs = []
-  let run = []
-  for (const s of allSlots) {
-    if (s.id === 'M8') {
-      if (run.length) runs.push(run)
-      run = []
-      continue
-    }
-    run.push(s)
-  }
-  if (run.length) runs.push(run)
-  const blocks = []
-  for (const r of runs) for (let i = 0; i + d <= r.length; i++) blocks.push(r.slice(i, i + d))
-  return blocks
-}
+const slotOrder = (id) => allSlots.findIndex((s) => s.id === id)
 
-// The "Add slots" field that appears once a slot system is chosen. Options are
-// week blocks sized to the course duration; faculty-preferred / clash-free
-// blocks float to the top, blocked weeks sink to the bottom. Hovering a row
-// reveals its exact dates and teaching days.
-export default function SlotPicker({ course, system }) {
-  const { updateCourse } = useApp()
+// Individual-week slot picker. Instead of pre-baked consecutive blocks, the
+// planner ticks the EXACT weeks a course runs in. The number of weeks is capped
+// at the course's duration (credits-derived); once that many are chosen, the
+// remaining weeks disable. Weeks already taken by ANOTHER course of the same
+// batch (cohort) — one that would genuinely clash, i.e. not a parallel elective
+// or a planned joint session — are muted and locked, so a cohort clash can't be
+// created from here. W8 (the institute-protected mid-sem week) is always locked.
+// This stays in sync with the second-tab grid editor via the store's
+// BroadcastChannel, so toggling a week here updates the grid and vice-versa.
+export default function SlotPicker({ course }) {
+  const { courses, updateCourse } = useApp()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -41,107 +28,107 @@ export default function SlotPicker({ course, system }) {
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
 
-  const duration = course.durationWeeks || course.slots.length || 1
-  const blockedWeeks = new Set(course.faculty.flatMap((f) => facultyPreferences[f]?.blockedSlots || []))
+  const cap = course.durationWeeks || course.slots.length || 1
+  const selected = course.slots
+  const selectedSet = new Set(selected)
 
-  const blocks = weekBlocks(duration).map((b) => {
-    const ids = b.map((s) => s.id)
-    const blockedHit = ids.filter((id) => blockedWeeks.has(id))
-    const isCurrent = ids.length === course.slots.length && ids.every((id) => course.slots.includes(id))
-    return {
-      ids,
-      key: ids.join('|'),
-      label: b.map((s) => s.label).join(', '),
-      span: slotsSpan(ids),
-      week: b[0].week,
-      blocked: blockedHit.length > 0,
-      blockedWeeks: blockedHit,
-      isCurrent,
-    }
-  })
-
-  // Rank: clash-free first, then last-year's choice, then by week. Blocked last.
-  const ranked = [...blocks].sort((a, b) => {
-    if (a.blocked !== b.blocked) return a.blocked ? 1 : -1
-    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1
-    return a.week - b.week
-  })
-  const favoured = ranked.filter((b) => !b.blocked).slice(0, 3)
-  const favouredKeys = new Set(favoured.map((b) => b.key))
-  const rest = ranked.filter((b) => !favouredKeys.has(b.key))
-
-  const selected = blocks.find((b) => b.isCurrent)
-  const teachingDays = duration * 5
-  const choose = (ids) => {
-    updateCourse({ ...course, slots: ids })
-    setOpen(false)
+  // One course per week per batch: any week already held by ANOTHER course of the
+  // same batch is locked (a week cannot fit two courses).
+  const takenBy = {} // slotId -> occupying course code
+  for (const other of courses) {
+    if (other.id === course.id || other.cohort !== course.cohort) continue
+    for (const s of other.slots) if (!takenBy[s]) takenBy[s] = other.code
   }
+
+  // Faculty availability preferences — soft (amber) warning, still selectable.
+  const softBlocked = new Set(
+    course.faculty.flatMap((f) => facultyPreferences[f]?.blockedSlots || []),
+  )
+
+  const toggle = (slotId) => {
+    if (selectedSet.has(slotId)) {
+      updateCourse({ ...course, slots: selected.filter((s) => s !== slotId) })
+    } else {
+      if (selected.length >= cap) return // cap reached — can't add more
+      const next = [...selected, slotId].sort((a, b) => slotOrder(a) - slotOrder(b))
+      updateCourse({ ...course, slots: next })
+    }
+  }
+
+  const label = selected.length ? selected.map(slotLabel).join(', ') : 'Choose weeks'
 
   return (
     <div className="relative" ref={ref}>
       <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
-        Slots <span className="text-slate-300">· {duration} wk</span>
+        Weeks <span className="text-slate-300">· pick {cap}</span>
       </div>
       <button
         onClick={() => setOpen((o) => !o)}
         className={`flex w-44 items-center justify-between rounded-lg border bg-white py-1.5 pl-3 pr-2 text-sm transition dark:bg-slate-900 ${
-          open ? 'border-accent ring-1 ring-accent/30' : 'border-slate-200 hover:border-slate-300 dark:border-slate-700'
+          open
+            ? 'border-accent ring-1 ring-accent/30'
+            : 'border-slate-200 hover:border-slate-300 dark:border-slate-700'
         }`}
       >
-        <span className={`truncate ${selected ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'}`}>
-          {selected ? selected.label : 'Choose slots'}
+        <span className={`truncate ${selected.length ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'}`}>
+          {label}
         </span>
         <ChevronDown size={15} className="shrink-0 text-slate-400" />
       </button>
 
       {open && (
         <div className="absolute left-0 top-full z-30 mt-1.5 max-h-72 w-64 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1.5 shadow-xl dark:border-slate-700 dark:bg-slate-900">
-          {favoured.length > 0 && (
-            <>
-              <div className="flex items-center gap-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
-                <Star size={11} /> Top picks
-                <span className="font-normal normal-case text-slate-400">· Slot System {system?.id}</span>
-              </div>
-              {favoured.map((b) => (
-                <Row key={b.key} block={b} teachingDays={teachingDays} recommended onSelect={() => choose(b.ids)} />
-              ))}
-              <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
-            </>
-          )}
-          <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-            All slots
+          <div className="flex items-center justify-between px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            <span>Tick the teaching weeks</span>
+            <span className={selected.length === cap ? 'text-green-600' : 'text-accent'}>
+              {selected.length}/{cap}
+            </span>
           </div>
-          {rest.map((b) => (
-            <Row key={b.key} block={b} teachingDays={teachingDays} onSelect={() => choose(b.ids)} />
-          ))}
+          {allSlots.map((s) => {
+            const checked = selectedSet.has(s.id)
+            const protectedWk = isProtected(s.id)
+            const occupied = takenBy[s.id]
+            const capReached = selected.length >= cap && !checked
+            const disabled = protectedWk || !!occupied || capReached
+            const soft = softBlocked.has(s.id)
+            return (
+              <button
+                key={s.id}
+                disabled={disabled}
+                onClick={() => toggle(s.id)}
+                title={
+                  protectedWk
+                    ? `${s.label} is institute-protected (mid-sem)`
+                    : occupied
+                      ? `${s.label} already used by ${occupied} for this batch`
+                      : soft
+                        ? `${s.label}: a faculty member flagged this week`
+                        : `${s.label} · ${slotDateRange(s.id)}`
+                }
+                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition ${
+                  disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                    checked
+                      ? 'border-accent bg-accent text-white'
+                      : 'border-slate-300 dark:border-slate-600'
+                  }`}
+                >
+                  {checked && <Check size={12} />}
+                </span>
+                <span className="text-sm text-slate-700 dark:text-slate-200">{s.label}</span>
+                {(protectedWk || occupied) && <Lock size={11} className="text-slate-400" />}
+                {!disabled && soft && <CircleAlert size={12} className="text-amber-500" />}
+                <span className="ml-auto shrink-0 text-[11px] text-slate-400">
+                  {occupied ? occupied : slotDateRange(s.id)}
+                </span>
+              </button>
+            )
+          })}
         </div>
       )}
     </div>
-  )
-}
-
-function Row({ block, teachingDays, recommended, onSelect }) {
-  return (
-    <button
-      onClick={onSelect}
-      title={`${block.span} · Mon–Fri · ${teachingDays} teaching days${
-        block.blocked ? ` · faculty blocked ${block.blockedWeeks.map((w) => w.replace('M', 'W')).join(', ')}` : ''
-      }`}
-      className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left transition hover:bg-slate-100 dark:hover:bg-slate-800 ${
-        block.blocked ? 'opacity-60' : ''
-      }`}
-    >
-      <span className="flex items-center gap-1.5">
-        {block.isCurrent && <Check size={13} className="text-accent" />}
-        <span className="text-sm text-slate-700 dark:text-slate-200">{block.label}</span>
-        {recommended && !block.isCurrent && (
-          <span className="rounded bg-green-100 px-1 text-[9px] font-semibold uppercase text-green-700 dark:bg-green-950/40 dark:text-green-300">
-            best
-          </span>
-        )}
-        {block.blocked && <CircleAlert size={12} className="text-amber-500" />}
-      </span>
-      <span className="shrink-0 text-[11px] text-slate-400">{block.span}</span>
-    </button>
   )
 }
