@@ -42,10 +42,10 @@ export default function Workspace() {
 
   const lockedById = {
     courses: false,
-    faculty: !coursesDone,
-    slot: !facultyDone,
-    venue: !slotDone,
-    generate: !slotDone,
+    faculty: false,
+    slot: false,
+    venue: false,
+    generate: false,
   }
   const doneById = {
     courses: coursesDone,
@@ -67,10 +67,10 @@ export default function Workspace() {
   }, [activeLocked]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (active === 'generate' && !workflow.generated && slotDone) {
+    if (active === 'generate' && !workflow.generated) {
       generate()
     }
-  }, [active, workflow.generated, slotDone, generate])
+  }, [active, workflow.generated, generate])
 
   const unassigned = p.slot.total - p.slot.done
 
@@ -143,54 +143,3 @@ export default function Workspace() {
 }
 
 
-// ── Step 5: Generate ───────────────────────────────────────────────────────
-function GenerateSection() {
-  const { courses, workflow, generate, changeRequests } = useApp()
-  const navigate = useNavigate()
-  const p = progress(courses)
-  const slotComplete = p.slot.done === p.slot.total
-
-  return (
-    <div className="mx-auto max-w-3xl">
-      <SectionHeader title="Generate Timetable" eyebrow="Build the draft from the allotments" />
-
-      <p className="mt-4 max-w-2xl text-sm text-slate-600 dark:text-slate-300">
-        The timetable can be generated once slot allotment is complete. Faculty and venue allotment
-        need not be finished — though for the most efficient result it's best to wait until they're
-        nearly done.
-      </p>
-
-      {!workflow.generated ? (
-        <div className="mt-6">
-          <button
-            disabled={!slotComplete}
-            onClick={() => {
-              generate()
-              navigate('/draft')
-            }}
-            className="flex items-center gap-2 rounded-2xl bg-accent px-7 py-4 text-base font-semibold text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Generate Timetable <ArrowRight size={18} />
-          </button>
-          {!slotComplete && (
-            <p className="mt-2 text-sm text-amber-600">
-              {p.slot.total - p.slot.done} course(s) still need a slot before you can generate.
-            </p>
-          )}
-        </div>
-      ) : (
-        <button
-          onClick={() => navigate('/draft')}
-          className="mt-6 w-80 rounded-2xl border border-slate-200 bg-white p-5 text-left transition hover:border-accent hover:shadow-sm dark:border-slate-800 dark:bg-slate-900"
-        >
-          <div className="text-base font-semibold text-slate-900 dark:text-white">
-            Open Draft Timetable
-          </div>
-          <div className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            {changeRequests.length} change request(s) raised · review & publish
-          </div>
-        </button>
-      )}
-    </div>
-  )
-}
