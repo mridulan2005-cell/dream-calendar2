@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Plus, Lock, X, RadioTower } from 'lucide-react'
+import { Plus, Lock, X, RadioTower, Ban } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
 import { slots as allSlots, slotDateRange, TERM, cohorts } from '../data/seed.js'
 import { isProtected } from '../data/rules.js'
@@ -9,11 +9,32 @@ const slotOrder = (id) => allSlots.findIndex((s) => s.id === id)
 
 // A grey course block, styled like the main timetable cells (code / batch /
 // faculty). The course currently being allotted carries a slight yellow border.
-function CourseBlock({ course, isActive, onRemove }) {
-  const cls = `w-full rounded-md bg-slate-100 px-2 py-1.5 text-left dark:bg-slate-800 ${
-    isActive ? 'border-2 border-amber-400 dark:border-amber-400' : 'border-2 border-transparent'
-  }`
-  const body = (
+//
+// `merge` tells the block which of its four edges touch a sibling cell that
+// belongs to the SAME visual block (same course down consecutive weeks, or the
+// same course across adjacent batches of identical duration). On those edges we
+// straighten the corners and drop the seam so the cells read as one continuous
+// block; everywhere else we keep the rounded, free-standing look. The
+// straightening is transitioned, so blocks fuse/split with a smooth
+// microinteraction as weeks are toggled. Only the block's top-left origin cell
+// carries the label — continuation cells render as bare fill.
+function CourseBlock({ course, isActive, onRemove, merge = {}, showLabel = true }) {
+  const radius = [
+    !merge.top && !merge.left ? 'rounded-tl-md' : '',
+    !merge.top && !merge.right ? 'rounded-tr-md' : '',
+    !merge.bottom && !merge.left ? 'rounded-bl-md' : '',
+    !merge.bottom && !merge.right ? 'rounded-br-md' : '',
+  ].join(' ')
+  // Active outline hugs the block's outer boundary. Vertical seams (same course,
+  // same active state) open up; horizontal seams stay closed since the neighbour
+  // is a different, un-highlighted batch.
+  const border = isActive
+    ? `border-l-amber-400 border-r-amber-400 ${merge.top ? 'border-t-transparent' : 'border-t-amber-400'} ${
+        merge.bottom ? 'border-b-transparent' : 'border-b-amber-400'
+      } dark:border-amber-400`
+    : 'border-transparent'
+  const cls = `flex h-full w-full flex-col justify-center border-2 bg-slate-100 px-2 py-1.5 text-left transition-all duration-300 ease-out dark:bg-slate-800 ${radius} ${border}`
+  const body = showLabel ? (
     <>
       <div className="truncate font-semibold text-slate-800 dark:text-slate-100">{course.code}</div>
       <div className="truncate text-[10px] text-slate-500 dark:text-slate-400">{course.cohort}</div>
@@ -23,10 +44,10 @@ function CourseBlock({ course, isActive, onRemove }) {
         </div>
       )}
     </>
-  )
+  ) : null
   if (onRemove) {
     return (
-      <button onClick={onRemove} title={`Remove ${course.code} from this week`} className={`group ${cls} transition hover:bg-slate-200 dark:hover:bg-slate-700`}>
+      <button onClick={onRemove} title={`Remove ${course.code} from this week`} className={`group ${cls} hover:bg-slate-200 dark:hover:bg-slate-700`}>
         {body}
       </button>
     )
@@ -51,6 +72,9 @@ export default function SlotGridEditor() {
   const focus = courses.find((c) => c.id === activeId) || null
   const cap = focus ? focus.durationWeeks || focus.slots.length || 1 : 0
   const chosen = focus ? focus.slots.length : 0
+  // The grid is System M only. A course slotted under any other system can't be
+  // placed here; a course with no system yet becomes M as soon as it's placed.
+  const focusIsM = focus ? !focus.slotSystem || focus.slotSystem === 'M' : false
 
   // Align the shared selection to this grid's course on first open.
   useEffect(() => {
@@ -82,7 +106,7 @@ export default function SlotGridEditor() {
     courses.find((c) => c.cohort === col && c.slots.includes(slotId))
 
   const toggleWeek = (slotId) => {
-    if (!focus || isProtected(slotId)) return
+    if (!focus || isProtected(slotId) || !focusIsM) return
     if (focus.slots.includes(slotId)) {
       updateCourse({ ...focus, slots: focus.slots.filter((s) => s !== slotId) })
       return
@@ -91,7 +115,8 @@ export default function SlotGridEditor() {
     const occ = occupantIn(focus.cohort, slotId)
     if (occ && occ.id !== focus.id) return // week already taken in this batch
     const next = [...focus.slots, slotId].sort((a, b) => slotOrder(a) - slotOrder(b))
-    updateCourse({ ...focus, slots: next })
+    // Placing on the grid commits the course to System M.
+    updateCourse({ ...focus, slots: next, slotSystem: 'M' })
   }
 
   if (!focus) {
@@ -102,6 +127,30 @@ export default function SlotGridEditor() {
         </p>
       </div>
     )
+  }
+
+  // Occupant grid (row = week, col = batch) used to decide where blocks fuse.
+  // Protected weeks are holes, so a course never merges across one.
+  const grid = allSlots.map((s) =>
+    isProtected(s.id) ? cols.map(() => null) : cols.map((col) => occupantIn(col, s.id) || null),
+  )
+  const sameSpan = (a, b) =>
+    a.slots.length === b.slots.length && a.slots.every((x) => b.slots.includes(x))
+  // Vertical: the very same course filling adjacent weeks. Horizontal: a
+  // different batch running the same course over the same set of weeks.
+  const fuses = (a, b, vertical) => {
+    if (!a || !b) return false
+    return vertical ? a.id === b.id : a.id !== b.id && a.code === b.code && sameSpan(a, b)
+  }
+  const mergeAt = (ri, ci) => {
+    const occ = grid[ri][ci]
+    if (!occ) return null
+    return {
+      top: fuses(occ, grid[ri - 1]?.[ci], true),
+      bottom: fuses(occ, grid[ri + 1]?.[ci], true),
+      left: fuses(occ, grid[ri][ci - 1], false),
+      right: fuses(occ, grid[ri][ci + 1], false),
+    }
   }
 
   return (
@@ -133,6 +182,16 @@ export default function SlotGridEditor() {
           </span>
         </div>
       </header>
+
+      {!focusIsM && (
+        <div className="flex items-center gap-2.5 border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+          <Ban size={16} className="shrink-0" />
+          <span>
+            <b>{focus.code}</b> is slotted under Slot System {focus.slotSystem}, which isn't placed on
+            the week grid. Switch it to System M in the planner to allot weeks here.
+          </span>
+        </div>
+      )}
 
       <div className="overflow-auto p-6">
         <table className="border-separate border-spacing-0 text-xs">
@@ -213,7 +272,7 @@ export default function SlotGridEditor() {
             </tr>
           </thead>
           <tbody>
-            {allSlots.map((s) => {
+            {allSlots.map((s, ri) => {
               const protectedWk = isProtected(s.id)
               return (
                 <tr key={s.id}>
@@ -231,15 +290,27 @@ export default function SlotGridEditor() {
                     </div>
                   </td>
 
-                  {cols.map((col) => {
+                  {cols.map((col, ci) => {
                     const isFocusBatch = col === focus.cohort
                     const occ = occupantIn(col, s.id)
                     const canAdd =
-                      isFocusBatch && !occ && !protectedWk && focus.slots.length < cap
+                      isFocusBatch && focusIsM && !occ && !protectedWk && focus.slots.length < cap
+                    const merge = mergeAt(ri, ci)
+                    // Close the inter-cell gap (td padding) and hide the seam
+                    // border on edges where this block fuses with a neighbour.
+                    const pad = merge
+                      ? `${merge.top ? 'pt-0' : 'pt-1'} ${merge.bottom ? 'pb-0' : 'pb-1'} ${
+                          merge.left ? 'pl-0' : 'pl-1'
+                        } ${merge.right ? 'pr-0' : 'pr-1'}`
+                      : 'p-1'
+                    const seamB =
+                      merge?.bottom ? 'border-b-transparent' : 'border-b-slate-200 dark:border-b-slate-800'
+                    const seamR =
+                      merge?.right ? 'border-r-transparent' : 'border-r-slate-200 dark:border-r-slate-800'
                     return (
                       <td
                         key={col}
-                        className={`h-14 border-b border-r border-slate-200 p-1 align-middle dark:border-slate-800 ${
+                        className={`h-14 border-b border-r ${seamB} ${seamR} ${pad} align-middle transition-all duration-300 ease-out ${
                           protectedWk
                             ? 'bg-slate-50/70 dark:bg-slate-900/40'
                             : isFocusBatch
@@ -256,6 +327,8 @@ export default function SlotGridEditor() {
                             course={occ}
                             isActive={occ.id === activeId}
                             onRemove={occ.id === activeId ? () => toggleWeek(s.id) : null}
+                            merge={merge}
+                            showLabel={!(merge.top || merge.left)}
                           />
                         ) : canAdd ? (
                           <button

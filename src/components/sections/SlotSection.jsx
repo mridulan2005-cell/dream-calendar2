@@ -16,12 +16,11 @@ import StatusFilter from './StatusFilter.jsx'
 // slotting-type selector reveals the week picker (and a "Grid" button that opens
 // the batch's week grid in a state-synced tab).
 export default function SlotSection() {
-  const { courses, workflow, setStepDone, selectedCourseId, setSelectedCourse } = useApp()
-  const [cohortTag, setCohortTag] = useState('all')
+  const { courses, workflow, setStepDone, selectedCourseId, setSelectedCourse, updateCourse } = useApp()
+  const [cohortTags, setCohortTags] = useState([]) // empty = show all batches
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all') // all | allotted | unallotted
   const [guideOpen, setGuideOpen] = useState(false)
-  const [choice, setChoice] = useState({}) // course id -> chosen slotting system
   const isAllotted = (c) => c.slots.length > 0
 
   const stat = progress(courses).slot
@@ -29,9 +28,14 @@ export default function SlotSection() {
   const stepDone = workflow.slotFinalised
   const q = query.trim().toLowerCase()
 
-  // Batch tags: "All" + every cohort that actually has courses, in seed order.
+  // Multi-select batch filter: any number of cohorts can be active at once;
+  // an empty selection means "All batches". Clicking a chip toggles it.
+  const toggleCohort = (t) =>
+    setCohortTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]))
+
+  // Batch tags: every cohort that actually has courses, in seed order.
   const batchTags = useMemo(
-    () => ['all', ...cohorts.filter((co) => courses.some((c) => c.cohort === co))],
+    () => cohorts.filter((co) => courses.some((c) => c.cohort === co)),
     [courses],
   )
 
@@ -39,10 +43,10 @@ export default function SlotSection() {
     () =>
       courses.filter(
         (c) =>
-          (cohortTag === 'all' || c.cohort === cohortTag) &&
+          (cohortTags.length === 0 || cohortTags.includes(c.cohort)) &&
           (!q || c.code.toLowerCase().includes(q) || c.title.toLowerCase().includes(q)),
       ),
-    [courses, cohortTag, q],
+    [courses, cohortTags, q],
   )
   const allottedCount = list.filter(isAllotted).length
   const counts = { all: list.length, allotted: allottedCount, unallotted: list.length - allottedCount }
@@ -96,19 +100,29 @@ export default function SlotSection() {
           {/* Batch tag filters + search */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
             <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setCohortTags([])}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                  cohortTags.length === 0
+                    ? 'bg-accent text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                }`}
+              >
+                All batches
+              </button>
               {batchTags.map((t) => {
-                const selected = cohortTag === t
+                const selected = cohortTags.includes(t)
                 return (
                   <button
                     key={t}
-                    onClick={() => setCohortTag(t)}
+                    onClick={() => toggleCohort(t)}
                     className={`rounded-full px-3 py-1 text-xs font-medium transition ${
                       selected
                         ? 'bg-accent text-white'
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
                     }`}
                   >
-                    {t === 'all' ? 'All batches' : t}
+                    {t}
                   </button>
                 )
               })}
@@ -134,7 +148,11 @@ export default function SlotSection() {
 
           <div className="mt-3 space-y-3 pb-4">
             {shown.map((c) => {
-              const sys = choice[c.id] || '' // default: no system chosen yet
+              // The slotting system lives on the course so it syncs across tabs.
+              // A course given weeks on the grid (M-slots) reads back as System M
+              // even if it was never picked here — so grid edits reflect at once.
+              const sys = c.slotSystem || (c.slots.length ? 'M' : '')
+              const isM = sys === 'M'
               const prefs = c.faculty
                 .map((f) => (facultyPreferences[f] ? { faculty: f, ...facultyPreferences[f] } : null))
                 .filter(Boolean)
@@ -175,7 +193,16 @@ export default function SlotSection() {
                         <div className="relative inline-block">
                           <select
                             value={sys}
-                            onChange={(e) => setChoice((s) => ({ ...s, [c.id]: e.target.value }))}
+                            onChange={(e) => {
+                              const v = e.target.value
+                              // Switching away from System M clears any week-grid
+                              // allotment — only M courses live on the grid.
+                              updateCourse({
+                                ...c,
+                                slotSystem: v || null,
+                                slots: v === 'M' ? c.slots : [],
+                              })
+                            }}
                             className={`appearance-none rounded-lg border border-slate-200 bg-white py-1.5 pl-3 pr-8 text-sm dark:border-slate-700 dark:bg-slate-900 ${
                               sys ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'
                             }`}
@@ -194,10 +221,12 @@ export default function SlotSection() {
                         </div>
                       </div>
 
-                      {/* Slots picker + direct-manipulation grid — appear once a
-                          system is chosen. The grid opens the batch's week-grid in
-                          a new, state-synced tab. */}
-                      {sys && (
+                      {/* Week picker + direct-manipulation grid — these are the
+                          System M surfaces (full-week studio blocks). Only an M
+                          course can be placed on the grid; other systems are
+                          slotted through their own timetable, so the grid is
+                          hidden for them. */}
+                      {isM && (
                         <div className="flex items-end gap-2">
                           <SlotPicker course={c} />
                           <button
@@ -214,6 +243,12 @@ export default function SlotSection() {
                           >
                             <Grid3x3 size={14} /> Grid
                           </button>
+                        </div>
+                      )}
+                      {sys && !isM && (
+                        <div className="mt-5 max-w-[14rem] text-xs leading-snug text-slate-400">
+                          Slot System {sys} is scheduled on its own timetable — not
+                          on the week grid.
                         </div>
                       )}
                     </div>

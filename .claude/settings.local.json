@@ -9,7 +9,8 @@
       "mcp__Claude_Preview__preview_start",
       "Skill(run)",
       "Skill(run:*)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "PowerShell(git push -u origin feat/slot-grid-editor)"
     ]
   }
 }

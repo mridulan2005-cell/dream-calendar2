@@ -21,9 +21,9 @@ const STEPS = [
 ]
 
 // The redesigned Department Timetable planner. A single workspace: a vertical
-// stepper on the left (primary nav) and the active section on the right. Steps
-// after "Running Courses" stay locked until the course list is confirmed, so the
-// flow is entered in order (guided wizard with free back-navigation, NN/g).
+// stepper on the left (primary nav) and the active section on the right. All
+// planner steps are accessible from the left rail so users can jump freely to
+// courses, faculty, slot, venue, or generate at any time.
 export default function Workspace() {
   const { courses, workflow, conflicts, generate } = useApp()
   const [active, setActive] = useState('courses')
@@ -31,22 +31,11 @@ export default function Workspace() {
   const p = progress(courses)
   const conflictFree = conflicts.conflicts.length === 0
 
-  // Step-by-step gating: a step is "done" only when the planner EXPLICITLY marks
-  // it done (not merely because the seed data is already filled). Each step
-  // unlocks only once the previous one is marked done — courses → faculty → slot
-  // → (venue + generate).
   const coursesDone = workflow.coursesFinalised
   const facultyDone = workflow.facultyFinalised
   const slotDone = workflow.slotFinalised
   const venueDone = workflow.venueFinalised
 
-  const lockedById = {
-    courses: false,
-    faculty: !coursesDone,
-    slot: !facultyDone,
-    venue: !slotDone,
-    generate: !slotDone,
-  }
   const doneById = {
     courses: coursesDone,
     faculty: facultyDone,
@@ -54,17 +43,7 @@ export default function Workspace() {
     venue: venueDone,
     generate: workflow.generated,
   }
-  const steps = STEPS.map((s) => ({ ...s, locked: lockedById[s.id], done: doneById[s.id] }))
-
-  // If the current step re-locks (e.g. an earlier allotment was undone), fall
-  // back to the furthest step still available.
-  const activeLocked = lockedById[active]
-  useEffect(() => {
-    if (activeLocked) {
-      const fallback = [...steps].reverse().find((s) => !s.locked)
-      if (fallback) setActive(fallback.id)
-    }
-  }, [activeLocked]) // eslint-disable-line react-hooks/exhaustive-deps
+  const steps = STEPS.map((s) => ({ ...s, locked: false, done: doneById[s.id] }))
 
   useEffect(() => {
     if (active === 'generate' && !workflow.generated && slotDone) {
