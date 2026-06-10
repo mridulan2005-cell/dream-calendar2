@@ -5,6 +5,7 @@ import { useApp } from '../store/AppContext.jsx'
 import { TERM } from '../data/seed.js'
 import { rankDestinations, evaluateCourse } from '../logic/constraints.js'
 import TimetableGrid from '../components/TimetableGrid.jsx'
+import PersonalisedTimetable from '../components/PersonalisedTimetable.jsx'
 import ChangeRequests from '../components/ChangeRequests.jsx'
 import EditCoursePanel from '../components/EditCoursePanel.jsx'
 import CoursePanel from '../components/CoursePanel.jsx'
@@ -69,7 +70,9 @@ export default function DraftTimetable() {
     return () => window.removeEventListener('keydown', onKey)
   }, [undo, redo])
   const [view, setView] = useState('student')
+  const [viewMode, setViewMode] = useState('planning') // 'planning' | 'personalised'
   const [sharing, setSharing] = useState(false)
+  const personalised = viewMode === 'personalised'
 
   // Single right-side panel. Mode is derived: edit > details > rail (tabbed).
   const [highlight, setHighlight] = useState(null) // selected courseId, ringed in the grid
@@ -278,7 +281,7 @@ export default function DraftTimetable() {
         </header>
 
         {/* Status strip */}
-        <div className="shrink-0 px-8 pt-4">
+        <div className={`shrink-0 px-8 pt-4 ${personalised ? 'hidden' : ''}`}>
           {hardConflicts > 0 ? (
             <div className="flex items-center gap-2 rounded-lg bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-300">
               <AlertTriangle size={16} />
@@ -294,76 +297,91 @@ export default function DraftTimetable() {
         {/* View controls */}
         <div className="flex shrink-0 items-center justify-between px-8 py-5">
           <div className="flex items-center gap-4">
-            {/* Undo / redo toolbar */}
-            <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700">
-              <button
-                onClick={undo}
-                disabled={!canUndo}
-                title="Undo (Ctrl+Z)"
-                className="flex h-8 w-8 items-center justify-center rounded-l-lg text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800"
-              >
-                <Undo2 size={16} />
-              </button>
-              <div className="h-5 w-px bg-slate-200 dark:bg-slate-700" />
-              <button
-                onClick={redo}
-                disabled={!canRedo}
-                title="Redo (Ctrl+Shift+Z)"
-                className="flex h-8 w-8 items-center justify-center rounded-r-lg text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800"
-              >
-                <Redo2 size={16} />
-              </button>
-            </div>
+            {/* Undo / redo toolbar — planning only (personalised view is read-only) */}
+            {!personalised && (
+              <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700">
+                <button
+                  onClick={undo}
+                  disabled={!canUndo}
+                  title="Undo (Ctrl+Z)"
+                  className="flex h-8 w-8 items-center justify-center rounded-l-lg text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  <Undo2 size={16} />
+                </button>
+                <div className="h-5 w-px bg-slate-200 dark:bg-slate-700" />
+                <button
+                  onClick={redo}
+                  disabled={!canRedo}
+                  title="Redo (Ctrl+Shift+Z)"
+                  className="flex h-8 w-8 items-center justify-center rounded-r-lg text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  <Redo2 size={16} />
+                </button>
+              </div>
+            )}
 
             <label className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-300">
               Select View:
-              <select className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 dark:border-slate-700 dark:bg-slate-900">
-                <option>Planning View</option>
+              <select
+                value={viewMode}
+                onChange={(e) => setViewMode(e.target.value)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 dark:border-slate-700 dark:bg-slate-900"
+              >
+                <option value="planning">Planning View</option>
+                <option value="personalised">Personalised View</option>
               </select>
             </label>
           </div>
 
-          <div className="flex items-center gap-3">
-            {placement && (
-              <span className="text-xs italic text-accent">View locked to Student during edit</span>
-            )}
-            <div className="flex gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
-              {VIEWS.map((v) => (
-                <button
-                  key={v.id}
-                  disabled={!!placement}
-                  onClick={() => setView(v.id)}
-                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition disabled:opacity-40 ${
-                    view === v.id
-                      ? 'bg-white text-slate-900 shadow dark:bg-slate-700 dark:text-white'
-                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
-                  }`}
-                >
-                  {v.label}
-                </button>
-              ))}
+          {!personalised && (
+            <div className="flex items-center gap-3">
+              {placement && (
+                <span className="text-xs italic text-accent">View locked to Student during edit</span>
+              )}
+              <div className="flex gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
+                {VIEWS.map((v) => (
+                  <button
+                    key={v.id}
+                    disabled={!!placement}
+                    onClick={() => setView(v.id)}
+                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition disabled:opacity-40 ${
+                      view === v.id
+                        ? 'bg-white text-slate-900 shadow dark:bg-slate-700 dark:text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
-        {/* Grid (the stable main focus) — the only scrolling region */}
-        <div className="min-h-0 flex-1 px-8 pb-6">
-          <TimetableGrid
-            view={view}
-            onCellClick={onCourseClick}
-            highlightCourseId={highlight}
-            placement={placement}
-            disputedIds={disputedIds}
-            previewCourse={detailsCourseId ? detailPreview : null}
-            onMoveCourses={(moves) =>
-              updateCourses(moves.map((m) => ({ ...m.course, slots: m.slots })))
-            }
-          />
-        </div>
+        {/* Main region — planning grid, or the read-only personalised view */}
+        {personalised ? (
+          <div className="min-h-0 flex-1">
+            <PersonalisedTimetable />
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 px-8 pb-6">
+            <TimetableGrid
+              view={view}
+              onCellClick={onCourseClick}
+              highlightCourseId={highlight}
+              placement={placement}
+              disputedIds={disputedIds}
+              previewCourse={detailsCourseId ? detailPreview : null}
+              onMoveCourses={(moves) =>
+                updateCourses(moves.map((m) => ({ ...m.course, slots: m.slots })))
+              }
+            />
+          </div>
+        )}
       </div>
 
-      {/* Single right-side panel: edit > details > requests */}
-      {edit && editCourse ? (
+      {/* Single right-side panel (planning only): edit > details > requests */}
+      {personalised ? null : edit && editCourse ? (
         <EditCoursePanel
           course={editCourse}
           request={changeRequests.find((r) => r.id === edit.requestId)}

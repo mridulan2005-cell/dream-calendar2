@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import { Plus, Lock, X, Ban, Layers, Check, MapPin } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
@@ -234,15 +235,36 @@ export default function SlotGridEditor() {
   }, [])
 
   const [cols, setCols] = useState(() => (cohort ? [cohort] : []))
+  // The "Add batch" menu is rendered in a portal anchored to its button, so it
+  // escapes the grid's horizontal-scroll container (which would otherwise clip
+  // it). `menuPos` is the button's viewport rect, captured when it opens.
   const [addOpen, setAddOpen] = useState(false)
-  const addRef = useRef(null)
+  const [menuPos, setMenuPos] = useState(null)
+  const addBtnRef = useRef(null)
+  const menuRef = useRef(null)
+  const toggleAddMenu = () => {
+    if (addOpen) return setAddOpen(false)
+    const r = addBtnRef.current?.getBoundingClientRect()
+    if (r) setMenuPos({ top: r.bottom + 6, right: window.innerWidth - r.right })
+    setAddOpen(true)
+  }
   useEffect(() => {
+    if (!addOpen) return
     const onDoc = (e) => {
-      if (addRef.current && !addRef.current.contains(e.target)) setAddOpen(false)
+      if (addBtnRef.current?.contains(e.target) || menuRef.current?.contains(e.target)) return
+      setAddOpen(false)
     }
+    const close = () => setAddOpen(false)
     document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [])
+    // Reposition isn't worth it — just close if the page scrolls or resizes.
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
+    }
+  }, [addOpen])
 
   // Make sure the active course's batch is always a visible column.
   useEffect(() => {
@@ -458,41 +480,16 @@ export default function SlotGridEditor() {
               })}
               {/* Add-batch control */}
               <th className="sticky top-0 border-b border-t border-slate-200 bg-white px-3 py-2.5 align-middle dark:border-slate-700 dark:bg-slate-950">
-                <div className="relative" ref={addRef}>
-                  <button
-                    onClick={() => setAddOpen((o) => !o)}
-                    disabled={addable.length === 0}
-                    className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-500 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-600 dark:text-slate-400"
-                  >
-                    <Plus size={14} /> Add batch
-                  </button>
-                  {addOpen && addable.length > 0 && (
-                    <div className="absolute right-0 bottom-full z-50 mb-1.5 max-h-72 w-52 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1.5 shadow-xl dark:border-slate-700 dark:bg-slate-900">
-                      <button
-                        onClick={() => {
-                          setCols(cohorts.slice())
-                          setAddOpen(false)
-                        }}
-                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm font-semibold text-accent transition hover:bg-slate-100 dark:hover:bg-slate-800"
-                      >
-                        <Plus size={13} /> All batches
-                      </button>
-                      <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
-                      {addable.map((c) => (
-                        <button
-                          key={c}
-                          onClick={() => {
-                            setCols((p) => [...p, c])
-                            setAddOpen(false)
-                          }}
-                          className="flex w-full items-center px-3 py-1.5 text-left text-sm text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
-                        >
-                          {c}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <button
+                  ref={addBtnRef}
+                  onClick={toggleAddMenu}
+                  disabled={addable.length === 0}
+                  aria-haspopup="listbox"
+                  aria-expanded={addOpen}
+                  className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-dashed border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-500 transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-600 dark:text-slate-400"
+                >
+                  <Plus size={14} /> Add batch
+                </button>
               </th>
             </tr>
           </thead>
@@ -644,6 +641,44 @@ export default function SlotGridEditor() {
           </tbody>
         </table>
       </div>
+
+      {/* Add-batch menu — portaled to the body so the grid's scroll container
+          can't clip it, fixed-positioned under its button. */}
+      {addOpen &&
+        addable.length > 0 &&
+        menuPos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="listbox"
+            style={{ position: 'fixed', top: menuPos.top, right: menuPos.right }}
+            className="z-50 max-h-72 w-52 overflow-y-auto rounded-xl border border-slate-200 bg-white py-1.5 shadow-xl dark:border-slate-700 dark:bg-slate-900"
+          >
+            <button
+              onClick={() => {
+                setCols(cohorts.slice())
+                setAddOpen(false)
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm font-semibold text-accent transition hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              <Plus size={13} /> All batches
+            </button>
+            <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+            {addable.map((c) => (
+              <button
+                key={c}
+                onClick={() => {
+                  setCols((p) => [...p, c])
+                  setAddOpen(false)
+                }}
+                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                {c}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
 
       {pending && (
         <ParallelModal

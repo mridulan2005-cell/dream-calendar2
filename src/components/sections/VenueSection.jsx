@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, MapPin } from 'lucide-react'
+import { ChevronDown, MapPin, Search } from 'lucide-react'
 import { useApp } from '../../store/AppContext.jsx'
 import { TERM, PREV_YEAR, venues as allVenues } from '../../data/seed.js'
-import { matchesFilter, progress } from '../../logic/timetable.js'
-import CourseFilters from '../CourseFilters.jsx'
+import { progress } from '../../logic/timetable.js'
+import BatchTabs from '../BatchTabs.jsx'
 import SectionHeader from './SectionHeader.jsx'
 import MarkDoneButton from './MarkDoneButton.jsx'
 import StatusFilter from './StatusFilter.jsx'
@@ -12,7 +12,8 @@ import StatusFilter from './StatusFilter.jsx'
 // right of each card shows the room the course used last year as a reference.
 export default function VenueSection() {
   const { courses, updateCourse, workflow, setStepDone, selectedCourseId, setSelectedCourse } = useApp()
-  const [filter, setFilter] = useState({ program: '', sub: '', query: '' })
+  const [cohortTags, setCohortTags] = useState([]) // empty = show all batches
+  const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all') // all | allotted | unallotted
   const isAllotted = (c) => !!c.venue
 
@@ -28,15 +29,15 @@ export default function VenueSection() {
   const stat = progress(courses).venue
   const complete = stat.done === stat.total
   const stepDone = workflow.venueFinalised
-  const q = filter.query.trim().toLowerCase()
+  const q = query.trim().toLowerCase()
   const list = useMemo(
     () =>
       courses.filter(
         (c) =>
-          matchesFilter(c, filter.program, filter.sub) &&
+          (cohortTags.length === 0 || cohortTags.includes(c.cohort)) &&
           (!q || c.code.toLowerCase().includes(q) || c.title.toLowerCase().includes(q)),
       ),
-    [courses, filter, q],
+    [courses, cohortTags, q],
   )
   const allottedCount = list.filter(isAllotted).length
   const counts = { all: list.length, allotted: allottedCount, unallotted: list.length - allottedCount }
@@ -67,8 +68,17 @@ export default function VenueSection() {
         }
       />
 
-      <div className="mt-5">
-        <CourseFilters value={filter} onChange={setFilter} />
+      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-3">
+        <BatchTabs value={cohortTags} onChange={setCohortTags} />
+        <div className="ml-auto flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+          <Search size={15} className="text-slate-400" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search for a course code or name"
+            className="w-60 bg-transparent text-sm outline-none placeholder:text-slate-400"
+          />
+        </div>
       </div>
       <div className="mt-4 flex items-center justify-between">
         <StatusFilter value={status} onChange={setStatus} counts={counts} />

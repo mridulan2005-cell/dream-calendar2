@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Info, ChevronDown, CircleAlert, Grid3x3, Search } from 'lucide-react'
 import { useApp } from '../../store/AppContext.jsx'
-import { TERM, PREV_YEAR, slotLabel, slotSystems, facultyPreferences, cohorts } from '../../data/seed.js'
+import { TERM, PREV_YEAR, slotLabel, slotSystems, facultyPreferences } from '../../data/seed.js'
 import { progress, pastSlotSystem } from '../../logic/timetable.js'
 import SlotSystemPanel from '../SlotSystemPanel.jsx'
 import SlotPicker from '../SlotPicker.jsx'
+import BatchTabs from '../BatchTabs.jsx'
 import SectionHeader from './SectionHeader.jsx'
 import MarkDoneButton from './MarkDoneButton.jsx'
 import StatusFilter from './StatusFilter.jsx'
@@ -27,17 +28,6 @@ export default function SlotSection() {
   const complete = stat.done === stat.total
   const stepDone = workflow.slotFinalised
   const q = query.trim().toLowerCase()
-
-  // Multi-select batch filter: any number of cohorts can be active at once;
-  // an empty selection means "All batches". Clicking a chip toggles it.
-  const toggleCohort = (t) =>
-    setCohortTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]))
-
-  // Batch tags: every cohort that actually has courses, in seed order.
-  const batchTags = useMemo(
-    () => cohorts.filter((co) => courses.some((c) => c.cohort === co)),
-    [courses],
-  )
 
   const list = useMemo(
     () =>
@@ -99,34 +89,7 @@ export default function SlotSection() {
         <div className="min-w-0 flex-1">
           {/* Batch tag filters + search */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                onClick={() => setCohortTags([])}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                  cohortTags.length === 0
-                    ? 'bg-accent text-white'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
-                }`}
-              >
-                All batches
-              </button>
-              {batchTags.map((t) => {
-                const selected = cohortTags.includes(t)
-                return (
-                  <button
-                    key={t}
-                    onClick={() => toggleCohort(t)}
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                      selected
-                        ? 'bg-accent text-white'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
-                    }`}
-                  >
-                    {t}
-                  </button>
-                )
-              })}
-            </div>
+            <BatchTabs value={cohortTags} onChange={setCohortTags} />
             <div className="ml-auto flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 dark:border-slate-700 dark:bg-slate-900">
               <Search size={15} className="text-slate-400" />
               <input
