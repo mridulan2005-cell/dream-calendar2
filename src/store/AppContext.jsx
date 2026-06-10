@@ -9,15 +9,25 @@ import { applyOp, detectConflicts } from '../logic/timetable.js'
 const AppContext = createContext(null)
 
 const initialState = {
-  // Slot allotment starts EMPTY: no course has weeks by default. Last year's
-  // slots are kept on `prevSlots` purely as an on-screen reference.
-  courses: seedCourses.map((c) => ({ ...c, prevSlots: c.slots, slots: [] })),
+  // Slot AND venue allotment start EMPTY: no course has weeks or a room by
+  // default. Last year's values are kept on `prevSlots` / `prevVenue` purely as
+  // an on-screen reference.
+  courses: seedCourses.map((c) => ({
+    ...c,
+    prevSlots: c.slots,
+    prevVenue: c.venue,
+    slots: [],
+    venue: '',
+  })),
   changeRequests: seedRequests,
   sharedAccess: seedShared,
   // The course currently being allotted (highlighted in the list, focused in the
   // grid). Synced across tabs so switching course in the planner switches it in
   // the grid too.
   selectedCourseId: null,
+  // Which planner step the list window is on. Synced across tabs so the grid
+  // editor knows whether it's a slot surface (editable) or a venue surface.
+  activeStep: 'courses',
   workflow: {
     // Each step is unlocked only after the previous one is explicitly marked done.
     coursesFinalised: false,
@@ -152,6 +162,9 @@ function baseReducer(state, action) {
     case 'SET_SELECTED_COURSE':
       return { ...state, selectedCourseId: action.id }
 
+    case 'SET_ACTIVE_STEP':
+      return { ...state, activeStep: action.step }
+
     // Replace the shared slice with state mirrored from another browser tab
     // (see the BroadcastChannel sync in AppProvider). Not undoable, and never
     // re-broadcast (the `applyingRemote` guard suppresses the echo).
@@ -194,6 +207,7 @@ export function AppProvider({ children }) {
       workflow: s.workflow,
       sharedAccess: s.sharedAccess,
       selectedCourseId: s.selectedCourseId,
+      activeStep: s.activeStep,
     })
     const ch = new BroadcastChannel('timetable-sync')
     channelRef.current = ch
@@ -235,9 +249,17 @@ export function AppProvider({ children }) {
         workflow: state.workflow,
         sharedAccess: state.sharedAccess,
         selectedCourseId: state.selectedCourseId,
+        activeStep: state.activeStep,
       },
     })
-  }, [state.courses, state.changeRequests, state.workflow, state.sharedAccess, state.selectedCourseId])
+  }, [
+    state.courses,
+    state.changeRequests,
+    state.workflow,
+    state.sharedAccess,
+    state.selectedCourseId,
+    state.activeStep,
+  ])
 
   // Derived: live conflict analysis over the current courses.
   const conflicts = useMemo(() => detectConflicts(state.courses), [state.courses])
@@ -258,6 +280,7 @@ export function AppProvider({ children }) {
       finaliseCourses: () => dispatch({ type: 'FINALISE_COURSES' }),
       setStepDone: (step, value) => dispatch({ type: 'SET_STEP_DONE', step, value }),
       setSelectedCourse: (id) => dispatch({ type: 'SET_SELECTED_COURSE', id }),
+      setActiveStep: (step) => dispatch({ type: 'SET_ACTIVE_STEP', step }),
       removeCourse: (id) => dispatch({ type: 'REMOVE_COURSE', id }),
       addCourse: (course) => dispatch({ type: 'ADD_COURSE', course }),
       generate: () => dispatch({ type: 'GENERATE' }),

@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { ChevronDown, Check, CircleAlert, Lock } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
 import { slots as allSlots, slotLabel, slotDateRange, facultyPreferences } from '../data/seed.js'
-import { isProtected } from '../data/rules.js'
+import { isExamWeek, examWeekLabel } from '../data/rules.js'
 
 const slotOrder = (id) => allSlots.findIndex((s) => s.id === id)
 
@@ -86,10 +86,10 @@ export default function SlotPicker({ course }) {
           </div>
           {allSlots.map((s) => {
             const checked = selectedSet.has(s.id)
-            const protectedWk = isProtected(s.id)
+            const examWk = isExamWeek(s.id)
             const occupied = takenBy[s.id]
             const capReached = selected.length >= cap && !checked
-            const disabled = protectedWk || !!occupied || capReached
+            const disabled = !!occupied || capReached
             const soft = softBlocked.has(s.id)
             return (
               <button
@@ -97,10 +97,10 @@ export default function SlotPicker({ course }) {
                 disabled={disabled}
                 onClick={() => toggle(s.id)}
                 title={
-                  protectedWk
-                    ? `${s.label} is institute-protected (mid-sem)`
-                    : occupied
-                      ? `${s.label} already used by ${occupied} for this batch`
+                  occupied
+                    ? `${s.label} already used by ${occupied} for this batch`
+                    : examWk
+                      ? `${s.label} · ${examWeekLabel(s.id)} — open for teaching`
                       : soft
                         ? `${s.label}: a faculty member flagged this week`
                         : `${s.label} · ${slotDateRange(s.id)}`
@@ -119,7 +119,12 @@ export default function SlotPicker({ course }) {
                   {checked && <Check size={12} />}
                 </span>
                 <span className="text-sm text-slate-700 dark:text-slate-200">{s.label}</span>
-                {(protectedWk || occupied) && <Lock size={11} className="text-slate-400" />}
+                {examWk && (
+                  <span className="rounded bg-rose-100 px-1 py-0.5 text-[9px] font-semibold uppercase text-rose-600 dark:bg-rose-950/50 dark:text-rose-300">
+                    {examWeekLabel(s.id).replace(' exams', '')}
+                  </span>
+                )}
+                {occupied && <Lock size={11} className="text-slate-400" />}
                 {!disabled && soft && <CircleAlert size={12} className="text-amber-500" />}
                 <span className="ml-auto shrink-0 text-[11px] text-slate-400">
                   {occupied ? occupied : slotDateRange(s.id)}

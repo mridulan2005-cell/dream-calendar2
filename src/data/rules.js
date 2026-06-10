@@ -3,15 +3,20 @@
 
 import { slots } from './seed.js'
 
-// Slots reserved institute-wide (no department course may be placed here).
-export const protectedSlots = ['M8']
+// No slot is hard-blocked any more: the exam weeks below are drawn as a backdrop
+// but still accept teaching/reviews, so nothing is institute-reserved.
+export const protectedSlots = []
 
-// Weeks where teaching does not happen (exam / break). Informational for the
-// duration checks; placement is by slot so these mainly annotate the impact.
+// Exam weeks, highlighted across every batch as a timetable backdrop. They do
+// NOT block placement — sessions can still be scheduled during them. Keyed by
+// teaching-week slot id (mid-sem ≈ W8, end-sem ≈ the final week).
 export const examWeeks = [
-  { label: 'Mid-sem week', start: '2026-09-21', end: '2026-09-27' },
-  { label: 'End-sem week', start: '2026-11-16', end: '2026-11-27' },
+  { id: 'M8', label: 'Mid-sem exams' },
+  { id: 'M15', label: 'End-sem exams' },
 ]
+const examSet = new Set(examWeeks.map((e) => e.id))
+export const isExamWeek = (slotId) => examSet.has(slotId)
+export const examWeekLabel = (slotId) => examWeeks.find((e) => e.id === slotId)?.label || ''
 
 // Rooms: seating capacity + facilities available.
 export const rooms = {

@@ -1,12 +1,18 @@
 import { useNavigate } from 'react-router-dom'
-import { Lock, ChevronLeft } from 'lucide-react'
+import { Lock, ChevronLeft, Check, BookOpen, Users, CalendarClock, MapPin, Sparkles } from 'lucide-react'
 import ThemeToggle from './ThemeToggle.jsx'
 
+// A meaningful icon per planner step, keyed by step id.
+const STEP_ICONS = {
+  courses: BookOpen,
+  faculty: Users,
+  slot: CalendarClock,
+  venue: MapPin,
+  generate: Sparkles,
+}
+
 // Vertical stepper that doubles as the planner's primary navigation.
-// Each step shows its state: done (check), current (filled accent), available
-// (hollow), or locked (padlock — not yet reachable). Steps after "Running
-// Courses" stay locked until that first step is confirmed, so the flow can't be
-// entered out of order (error-prevention; guided-wizard pattern, NN/g).
+// Each item is now a free-access nav item with no visible step number.
 export default function StepNav({ steps, active, onSelect, stats, progress }) {
   const navigate = useNavigate()
   return (
@@ -45,11 +51,8 @@ export default function StepNav({ steps, active, onSelect, stats, progress }) {
                     : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800/60'
               }`}
             >
-              <StepMarker n={s.n} done={s.done} active={isActive} locked={disabled} />
+              <StepMarker id={s.id} done={s.done} active={isActive} locked={disabled} />
               <span className="flex-1 leading-tight">
-                <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                  Step {s.n}
-                </span>
                 {s.label}
               </span>
               {progress && progress[s.id] ? (
@@ -70,8 +73,9 @@ export default function StepNav({ steps, active, onSelect, stats, progress }) {
   )
 }
 
-// The numbered marker on the left of each step.
-function StepMarker({ n, done, active, locked }) {
+// The marker on the left of each step: the step's own icon, or a lock / check
+// when the step is locked or finalised.
+function StepMarker({ id, done, active, locked }) {
   if (locked) {
     return (
       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-dashed border-slate-300 text-slate-300 dark:border-slate-700 dark:text-slate-600">
@@ -81,20 +85,21 @@ function StepMarker({ n, done, active, locked }) {
   }
   if (done) {
     return (
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-600 text-white text-xs font-bold">
-        {n}
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-600 text-white">
+        <Check size={14} />
       </span>
     )
   }
+  const Icon = STEP_ICONS[id] || BookOpen
   return (
     <span
-      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold transition ${
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition ${
         active
           ? 'bg-accent text-white'
           : 'border border-slate-300 text-slate-500 group-hover:border-accent group-hover:text-accent dark:border-slate-600 dark:text-slate-300'
       }`}
     >
-      {n}
+      <Icon size={14} />
     </span>
   )
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, MapPin } from 'lucide-react'
 import { useApp } from '../../store/AppContext.jsx'
 import { TERM, PREV_YEAR, venues as allVenues } from '../../data/seed.js'
@@ -11,10 +11,19 @@ import StatusFilter from './StatusFilter.jsx'
 // Step 4 — venue allotment, as cards consistent with the faculty/slot lists. The
 // right of each card shows the room the course used last year as a reference.
 export default function VenueSection() {
-  const { courses, updateCourse, workflow, setStepDone } = useApp()
+  const { courses, updateCourse, workflow, setStepDone, selectedCourseId, setSelectedCourse } = useApp()
   const [filter, setFilter] = useState({ program: '', sub: '', query: '' })
   const [status, setStatus] = useState('all') // all | allotted | unallotted
   const isAllotted = (c) => !!c.venue
+
+  // Bring the course selected elsewhere (e.g. clicked in the grid editor) into
+  // view here, so picking a course in the grid surfaces it for venue allotment.
+  const selectedRef = useRef(null)
+  useEffect(() => {
+    if (selectedCourseId && selectedRef.current) {
+      selectedRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [selectedCourseId])
 
   const stat = progress(courses).venue
   const complete = stat.done === stat.total
@@ -70,10 +79,18 @@ export default function VenueSection() {
       </div>
 
       <div className="mt-3 space-y-3 pb-4">
-        {shown.map((c) => (
+        {shown.map((c) => {
+          const isSelected = selectedCourseId === c.id
+          return (
           <div
             key={c.id}
-            className="flex items-center gap-5 rounded-2xl border border-slate-200 bg-white px-5 py-4 transition hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900"
+            ref={isSelected ? selectedRef : null}
+            onClick={() => setSelectedCourse(c.id)}
+            className={`flex cursor-pointer items-center gap-5 rounded-2xl border bg-white px-5 py-4 transition dark:bg-slate-900 ${
+              isSelected
+                ? 'border-amber-400 ring-2 ring-amber-300 dark:border-amber-500 dark:ring-amber-700'
+                : 'border-slate-200 hover:border-slate-300 dark:border-slate-800'
+            }`}
           >
             <div className="min-w-0 flex-[1.4]">
               <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
@@ -113,9 +130,9 @@ export default function VenueSection() {
 
             <div className="flex w-52 shrink-0 items-center justify-end gap-1.5 text-right text-xs text-slate-400">
               <MapPin size={13} className="shrink-0" />
-              {c.venue ? (
+              {c.prevVenue ? (
                 <span>
-                  Used <span className="font-medium text-slate-600 dark:text-slate-300">{c.venue}</span> in{' '}
+                  Used <span className="font-medium text-slate-600 dark:text-slate-300">{c.prevVenue}</span> in{' '}
                   {PREV_YEAR}
                 </span>
               ) : (
@@ -123,7 +140,8 @@ export default function VenueSection() {
               )}
             </div>
           </div>
-        ))}
+          )
+        })}
         {shown.length === 0 && (
           <p className="rounded-xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400 dark:border-slate-800">
             No courses in this view.

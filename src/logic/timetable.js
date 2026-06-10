@@ -151,10 +151,12 @@ export function detectConflicts(courses) {
         const a = group[i]
         const b = group[j]
         // The same course taught to several cohorts (one shared session),
-        // parallel electives (student picks one), and planned co-taught joint
-        // sessions are intentional overlaps, not clashes.
+        // parallel electives (student picks one), planned co-taught joint
+        // sessions, and pairs the coordinator has explicitly marked parallel in
+        // the grid are intentional overlaps, not clashes.
         if (a.code === b.code) continue
         if (inSameElectiveGroup(a.id, b.id) || isJointSession(a.id, b.id)) continue
+        if (a.parallel?.includes(b.id) || b.parallel?.includes(a.id)) continue
         const reasons = []
         if (a.cohort === b.cohort) reasons.push({ type: 'cohort', value: a.cohort })
         const sharedFac = a.faculty.filter((f) => b.faculty.includes(f))

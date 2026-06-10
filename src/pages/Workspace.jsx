@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Share2, ArrowRight } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
@@ -25,8 +25,9 @@ const STEPS = [
 // planner steps are accessible from the left rail so users can jump freely to
 // courses, faculty, slot, venue, or generate at any time.
 export default function Workspace() {
-  const { courses, workflow, conflicts, generate } = useApp()
-  const [active, setActive] = useState('courses')
+  const { courses, workflow, conflicts, generate, activeStep, setActiveStep } = useApp()
+  const active = activeStep
+  const setActive = setActiveStep
 
   const p = progress(courses)
   const conflictFree = conflicts.conflicts.length === 0
