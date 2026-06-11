@@ -2,15 +2,18 @@ import { useMemo } from 'react'
 import { useApp } from '../store/AppContext.jsx'
 import { cohorts } from '../data/seed.js'
 
-// Multi-select row of batch (cohort) filter chips, shared by the Slot and Venue
-// allotment lists. "All batches" clears the selection (= show everything); each
-// chip toggles its cohort. Controlled — parent owns the selected-cohorts array.
-export default function BatchTabs({ value, onChange }) {
+// Multi-select row of filter chips. Defaults to the batch (cohort) chips shared
+// by the Slot and Venue lists, but accepts an explicit `options` list (e.g.
+// faculty names) and an `allLabel` so the same control drives a "By faculty"
+// filter too. "All …" clears the selection (= show everything); each chip
+// toggles its value. Controlled — parent owns the selected-values array.
+export default function BatchTabs({ value, onChange, options, allLabel = 'All batches' }) {
   const { courses } = useApp()
-  // Only offer cohorts that actually have courses, in seed order.
-  const batchTags = useMemo(
-    () => cohorts.filter((co) => courses.some((c) => c.cohort === co)),
-    [courses],
+  // Only offer cohorts that actually have courses, in seed order — unless an
+  // explicit option list is supplied.
+  const tags = useMemo(
+    () => options ?? cohorts.filter((co) => courses.some((c) => c.cohort === co)),
+    [courses, options],
   )
   const toggle = (t) =>
     onChange(value.includes(t) ? value.filter((x) => x !== t) : [...value, t])
@@ -24,9 +27,9 @@ export default function BatchTabs({ value, onChange }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <button onClick={() => onChange([])} className={chip(value.length === 0)}>
-        All batches
+        {allLabel}
       </button>
-      {batchTags.map((t) => (
+      {tags.map((t) => (
         <button key={t} onClick={() => toggle(t)} className={chip(value.includes(t))}>
           {t}
         </button>

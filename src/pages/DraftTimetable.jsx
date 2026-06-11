@@ -50,25 +50,7 @@ export default function DraftTimetable() {
   const { courses, changeRequests, conflicts, pendingRequests, workflow, publish, updateCourse, updateCourses, resolveRequests, undo, redo, canUndo, canRedo } =
     useApp()
 
-  // Undo / redo keyboard shortcuts (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y).
-  useEffect(() => {
-    const onKey = (e) => {
-      const tag = e.target.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target.isContentEditable) return
-      const mod = e.metaKey || e.ctrlKey
-      if (!mod) return
-      const k = e.key.toLowerCase()
-      if (k === 'z' && !e.shiftKey) {
-        e.preventDefault()
-        undo()
-      } else if ((k === 'z' && e.shiftKey) || k === 'y') {
-        e.preventDefault()
-        redo()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [undo, redo])
+  // Undo / redo keyboard shortcuts are wired globally in AppProvider.
   const [view, setView] = useState('student')
   const [viewMode, setViewMode] = useState('planning') // 'planning' | 'personalised'
   const [sharing, setSharing] = useState(false)

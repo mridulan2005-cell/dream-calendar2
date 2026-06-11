@@ -157,6 +157,9 @@ export function detectConflicts(courses) {
         if (a.code === b.code) continue
         if (inSameElectiveGroup(a.id, b.id) || isJointSession(a.id, b.id)) continue
         if (a.parallel?.includes(b.id) || b.parallel?.includes(a.id)) continue
+        // Courses explicitly linked as a joint session (same teacher, same time,
+        // across batches) are intentional, not a clash.
+        if (a.linked?.includes(b.id) || b.linked?.includes(a.id)) continue
         const reasons = []
         if (a.cohort === b.cohort) reasons.push({ type: 'cohort', value: a.cohort })
         const sharedFac = a.faculty.filter((f) => b.faculty.includes(f))

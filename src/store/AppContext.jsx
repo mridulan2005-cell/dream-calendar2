@@ -25,6 +25,10 @@ const initialState = {
   // grid). Synced across tabs so switching course in the planner switches it in
   // the grid too.
   selectedCourseId: null,
+  // The full multi-selection (Shift/⌘-click in the list). Synced so the grid can
+  // place every selected course into a clicked week at once (running them in
+  // parallel). selectedCourseId is the primary of this set.
+  selectedCourseIds: [],
   // Which planner step the list window is on. Synced across tabs so the grid
   // editor knows whether it's a slot surface (editable) or a venue surface.
   activeStep: 'courses',
@@ -160,7 +164,10 @@ function baseReducer(state, action) {
       return { ...state, theme: action.theme }
 
     case 'SET_SELECTED_COURSE':
-      return { ...state, selectedCourseId: action.id }
+      return { ...state, selectedCourseId: action.id, selectedCourseIds: action.id ? [action.id] : [] }
+
+    case 'SET_SELECTED_COURSES':
+      return { ...state, selectedCourseIds: action.ids, selectedCourseId: action.ids[0] || null }
 
     case 'SET_ACTIVE_STEP':
       return { ...state, activeStep: action.step }
@@ -186,6 +193,37 @@ export function AppProvider({ children }) {
     else root.classList.remove('dark')
   }, [state.theme])
 
+  // --- Global undo / redo shortcuts ---------------------------------------
+  // Ctrl/Cmd+Z undoes the last edit; Ctrl/Cmd+V (and the conventional
+  // Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z) redoes it. Active everywhere — the grid
+  // editor, the planner and the draft — so an edit can always be walked back.
+  // We bow out while a text field is focused so its native editing still works
+  // (and a real paste in an input is never hijacked).
+  useEffect(() => {
+    const onKey = (e) => {
+      const t = e.target
+      if (
+        t &&
+        (t.tagName === 'INPUT' ||
+          t.tagName === 'TEXTAREA' ||
+          t.tagName === 'SELECT' ||
+          t.isContentEditable)
+      )
+        return
+      if (!(e.metaKey || e.ctrlKey)) return
+      const k = e.key.toLowerCase()
+      if (k === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        dispatch({ type: 'UNDO' })
+      } else if (k === 'y' || k === 'v' || (k === 'z' && e.shiftKey)) {
+        e.preventDefault()
+        dispatch({ type: 'REDO' })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   // --- Cross-tab sync (BroadcastChannel) ----------------------------------
   // The slot-grid editor opens in a SEPARATE browser tab; each tab runs its own
   // store. We mirror the shared slice (courses / change requests / workflow /
@@ -207,6 +245,7 @@ export function AppProvider({ children }) {
       workflow: s.workflow,
       sharedAccess: s.sharedAccess,
       selectedCourseId: s.selectedCourseId,
+      selectedCourseIds: s.selectedCourseIds,
       activeStep: s.activeStep,
     })
     const ch = new BroadcastChannel('timetable-sync')
@@ -249,6 +288,7 @@ export function AppProvider({ children }) {
         workflow: state.workflow,
         sharedAccess: state.sharedAccess,
         selectedCourseId: state.selectedCourseId,
+        selectedCourseIds: state.selectedCourseIds,
         activeStep: state.activeStep,
       },
     })
@@ -258,6 +298,7 @@ export function AppProvider({ children }) {
     state.workflow,
     state.sharedAccess,
     state.selectedCourseId,
+    state.selectedCourseIds,
     state.activeStep,
   ])
 
@@ -280,6 +321,7 @@ export function AppProvider({ children }) {
       finaliseCourses: () => dispatch({ type: 'FINALISE_COURSES' }),
       setStepDone: (step, value) => dispatch({ type: 'SET_STEP_DONE', step, value }),
       setSelectedCourse: (id) => dispatch({ type: 'SET_SELECTED_COURSE', id }),
+      setSelectedCourses: (ids) => dispatch({ type: 'SET_SELECTED_COURSES', ids }),
       setActiveStep: (step) => dispatch({ type: 'SET_ACTIVE_STEP', step }),
       removeCourse: (id) => dispatch({ type: 'REMOVE_COURSE', id }),
       addCourse: (course) => dispatch({ type: 'ADD_COURSE', course }),

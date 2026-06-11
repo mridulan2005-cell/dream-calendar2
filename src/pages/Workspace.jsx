@@ -17,7 +17,7 @@ const STEPS = [
   { id: 'faculty', n: '02', label: 'Faculty Allotment' },
   { id: 'slot', n: '03', label: 'Slot Allotment' },
   { id: 'venue', n: '04', label: 'Venue Allotment' },
-  { id: 'generate', n: '05', label: 'Generate Timetable' },
+  { id: 'generate', n: '05', label: 'Master Timetable' },
 ]
 
 // The redesigned Department Timetable planner. A single workspace: a vertical

@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useApp } from '../store/AppContext.jsx'
 import { buildGrid, detectConflicts } from '../logic/timetable.js'
-import { slotDateRange } from '../data/seed.js'
+
+// "2025-07-28" → "28-07" for the Week / Start / End date columns.
+const ddmm = (iso) => {
+  const p = (iso || '').split('-')
+  return p.length === 3 ? `${p[2]}-${p[1]}` : ''
+}
 
 // Category background for placement-mode destination cells.
 const CAT = {
@@ -261,9 +266,21 @@ export default function TimetableGrid({
               <tr>
                 <th
                   rowSpan={2}
-                  className="sticky left-0 top-0 z-30 h-9 w-32 border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
+                  className="sticky left-0 top-0 z-30 w-12 border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
                 >
-                  Slot
+                  Week
+                </th>
+                <th
+                  rowSpan={2}
+                  className="sticky left-[3rem] top-0 z-30 w-14 border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
+                >
+                  Start
+                </th>
+                <th
+                  rowSpan={2}
+                  className="sticky left-[6.5rem] top-0 z-30 w-14 border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
+                >
+                  End
                 </th>
                 {header.programs.map((g) => (
                   <th
@@ -307,8 +324,14 @@ export default function TimetableGrid({
             </>
           ) : (
             <tr>
-              <th className="sticky left-0 top-0 z-30 h-12 w-32 border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
-                Slot
+              <th className="sticky left-0 top-0 z-30 h-12 w-12 border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+                Week
+              </th>
+              <th className="sticky left-[3rem] top-0 z-30 h-12 w-14 border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+                Start
+              </th>
+              <th className="sticky left-[6.5rem] top-0 z-30 h-12 w-14 border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+                End
               </th>
               {columns.map((col) => (
                 <th
@@ -335,11 +358,14 @@ export default function TimetableGrid({
         <tbody>
           {rows.map((slot, ri) => (
             <tr key={slot.id}>
-              <td className="sticky left-0 z-10 h-16 w-32 border border-slate-200 bg-white px-2 py-3 align-top text-slate-500 dark:border-slate-800 dark:bg-slate-950">
-                <div className="font-semibold">{slot.label}</div>
-                <div className="whitespace-nowrap text-[9px] font-normal text-slate-400">
-                  {slotDateRange(slot.id)}
-                </div>
+              <td className="sticky left-0 z-10 h-16 w-12 border border-slate-200 bg-white px-2 py-3 align-top font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+                {slot.label}
+              </td>
+              <td className="sticky left-[3rem] z-10 h-16 w-14 whitespace-nowrap border border-slate-200 bg-white px-2 py-3 align-top text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+                {ddmm(slot.dateRange.start)}
+              </td>
+              <td className="sticky left-[6.5rem] z-10 h-16 w-14 whitespace-nowrap border border-slate-200 bg-white px-2 py-3 align-top text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+                {ddmm(slot.dateRange.end)}
               </td>
               {columns.map((col, ci) => {
                 const k = K(ri, ci)

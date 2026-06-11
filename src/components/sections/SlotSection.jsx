@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Info, ChevronDown, CircleAlert, Grid3x3, Search } from 'lucide-react'
 import { useApp } from '../../store/AppContext.jsx'
 import { TERM, PREV_YEAR, slotLabel, slotSystems, facultyPreferences } from '../../data/seed.js'
@@ -17,12 +17,31 @@ import StatusFilter from './StatusFilter.jsx'
 // slotting-type selector reveals the week picker (and a "Grid" button that opens
 // the batch's week grid in a state-synced tab).
 export default function SlotSection() {
-  const { courses, workflow, setStepDone, selectedCourseId, setSelectedCourse, updateCourse } = useApp()
+  const {
+    courses,
+    workflow,
+    setStepDone,
+    selectedCourseId,
+    selectedCourseIds,
+    setSelectedCourse,
+    setSelectedCourses,
+    updateCourse,
+  } = useApp()
+  const [filterBy, setFilterBy] = useState('batch') // 'batch' | 'faculty'
   const [cohortTags, setCohortTags] = useState([]) // empty = show all batches
+  const [facultyTags, setFacultyTags] = useState([]) // empty = show all faculty
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all') // all | allotted | unallotted
   const [guideOpen, setGuideOpen] = useState(false)
+  // Anchor for Shift-range selection. The selection itself lives in the store so
+  // the grid window can read it and place every picked course into a week.
+  const [lastClicked, setLastClicked] = useState(null)
   const isAllotted = (c) => c.slots.length > 0
+  // Faculty who teach at least one course — the options for the "By faculty" chips.
+  const facultyOptions = useMemo(
+    () => [...new Set(courses.flatMap((c) => c.faculty))].sort(),
+    [courses],
+  )
 
   const stat = progress(courses).slot
   const complete = stat.done === stat.total
@@ -31,20 +50,74 @@ export default function SlotSection() {
 
   const list = useMemo(
     () =>
-      courses.filter(
-        (c) =>
-          (cohortTags.length === 0 || cohortTags.includes(c.cohort)) &&
-          (!q || c.code.toLowerCase().includes(q) || c.title.toLowerCase().includes(q)),
-      ),
-    [courses, cohortTags, q],
+      courses.filter((c) => {
+        const matchesChips =
+          filterBy === 'batch'
+            ? cohortTags.length === 0 || cohortTags.includes(c.cohort)
+            : facultyTags.length === 0 || c.faculty.some((f) => facultyTags.includes(f))
+        return (
+          matchesChips &&
+          (!q || c.code.toLowerCase().includes(q) || c.title.toLowerCase().includes(q))
+        )
+      }),
+    [courses, filterBy, cohortTags, facultyTags, q],
   )
   const allottedCount = list.filter(isAllotted).length
   const counts = { all: list.length, allotted: allottedCount, unallotted: list.length - allottedCount }
   const shown =
     status === 'all' ? list : list.filter((c) => (status === 'allotted' ? isAllotted(c) : !isAllotted(c)))
 
+  // Jump to the selected course (e.g. picked in the grid window): scroll its card
+  // into view, clearing filters first if they'd hide it.
+  const selectedRef = useRef(null)
+  useEffect(() => {
+    if (!selectedCourseId) return
+    if (!shown.some((c) => c.id === selectedCourseId)) {
+      if (cohortTags.length) setCohortTags([])
+      if (facultyTags.length) setFacultyTags([])
+      if (status !== 'all') setStatus('all')
+      return
+    }
+    selectedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCourseId, cohortTags, facultyTags, status, filterBy])
+
+  // Card click: plain = single select, ⌘/Ctrl = toggle, Shift = range (over the
+  // visible list). The selection syncs to the grid window, where clicking a week
+  // places every picked course there (confirming the parallel run).
+  const onCardClick = (c, e) => {
+    e.stopPropagation() // don't let it bubble to the deselect handler
+    if (e.shiftKey && lastClicked) {
+      const ids = shown.map((x) => x.id)
+      const i1 = ids.indexOf(lastClicked)
+      const i2 = ids.indexOf(c.id)
+      if (i1 !== -1 && i2 !== -1) {
+        const [lo, hi] = i1 < i2 ? [i1, i2] : [i2, i1]
+        setSelectedCourses([...new Set([...selectedCourseIds, ...ids.slice(lo, hi + 1)])])
+      }
+      setLastClicked(c.id)
+    } else if (e.metaKey || e.ctrlKey) {
+      setSelectedCourses(
+        selectedCourseIds.includes(c.id)
+          ? selectedCourseIds.filter((x) => x !== c.id)
+          : [...selectedCourseIds, c.id],
+      )
+      setLastClicked(c.id)
+    } else {
+      setSelectedCourse(c.id)
+      setLastClicked(c.id)
+    }
+  }
+
   return (
-    <div className="mx-auto max-w-7xl">
+    <div
+      className="mx-auto max-w-7xl"
+      onClick={() => {
+        // Click anywhere that isn't a course card → clear the selection.
+        if (selectedCourseIds.length) setSelectedCourse(null)
+        setLastClicked(null)
+      }}
+    >
       <SectionHeader
         eyebrow={`Department Timetable ${TERM.semester} 2026-27`}
         title="Slot Allotment"
@@ -87,9 +160,36 @@ export default function SlotSection() {
       <div className="mt-5 flex items-start gap-6">
         {/* Left: filters + course cards */}
         <div className="min-w-0 flex-1">
-          {/* Batch tag filters + search */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-            <BatchTabs value={cohortTags} onChange={setCohortTags} />
+          {/* Batch / faculty toggle + matching filter chips + search */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
+            <div className="flex shrink-0 rounded-lg bg-slate-100 p-0.5 dark:bg-slate-800">
+              {[
+                { id: 'batch', label: 'By batch' },
+                { id: 'faculty', label: 'By faculty' },
+              ].map((o) => (
+                <button
+                  key={o.id}
+                  onClick={() => setFilterBy(o.id)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+                    filterBy === o.id
+                      ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            {filterBy === 'batch' ? (
+              <BatchTabs value={cohortTags} onChange={setCohortTags} />
+            ) : (
+              <BatchTabs
+                value={facultyTags}
+                onChange={setFacultyTags}
+                options={facultyOptions}
+                allLabel="All faculty"
+              />
+            )}
             <div className="ml-auto flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 dark:border-slate-700 dark:bg-slate-900">
               <Search size={15} className="text-slate-400" />
               <input
@@ -109,6 +209,17 @@ export default function SlotSection() {
             </span>
           </div>
 
+          {/* Multi-select hint — the picks carry over to the grid window. */}
+          {selectedCourseIds.length >= 2 && (
+            <div className="mt-3 flex items-center gap-2 rounded-xl border border-accent/30 bg-accent-soft px-4 py-2 text-xs text-slate-600 dark:border-accent/20 dark:bg-slate-800 dark:text-slate-300">
+              <span className="font-semibold text-slate-800 dark:text-slate-100">
+                {selectedCourseIds.length} courses selected.
+              </span>
+              Open the grid and click a week to place them together — you'll confirm the parallel run
+              there.
+            </div>
+          )}
+
           <div className="mt-3 space-y-3 pb-4">
             {shown.map((c) => {
               // The slotting system lives on the course so it syncs across tabs.
@@ -120,12 +231,13 @@ export default function SlotSection() {
                 .map((f) => (facultyPreferences[f] ? { faculty: f, ...facultyPreferences[f] } : null))
                 .filter(Boolean)
               const pastSlots = c.prevSlots?.length ? c.prevSlots.map(slotLabel).join(', ') : '—'
-              const isSelected = selectedCourseId === c.id
+              const isSelected = selectedCourseIds.includes(c.id)
               return (
                 <div
                   key={c.id}
-                  onClick={() => setSelectedCourse(c.id)}
-                  className={`cursor-pointer rounded-2xl border bg-white px-5 py-4 transition dark:bg-slate-900 ${
+                  ref={c.id === selectedCourseId ? selectedRef : null}
+                  onClick={(e) => onCardClick(c, e)}
+                  className={`cursor-pointer select-none rounded-2xl border bg-white px-5 py-4 transition dark:bg-slate-900 ${
                     isSelected
                       ? 'border-amber-400 ring-2 ring-amber-300 dark:border-amber-500 dark:ring-amber-700'
                       : 'border-slate-200 hover:border-slate-300 dark:border-slate-800'
@@ -147,8 +259,9 @@ export default function SlotSection() {
                       </div>
                     </div>
 
-                    {/* Slotting type + the slots it offers */}
-                    <div className="flex flex-[2] items-start gap-3">
+                    {/* Slotting type + the slots it offers. Interacting with these
+                        controls shouldn't change the card multi-selection. */}
+                    <div className="flex flex-[2] items-start gap-3" onClick={(e) => e.stopPropagation()}>
                       <div>
                         <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
                           Slotting type

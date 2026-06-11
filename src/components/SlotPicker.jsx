@@ -120,7 +120,7 @@ export default function SlotPicker({ course }) {
                 </span>
                 <span className="text-sm text-slate-700 dark:text-slate-200">{s.label}</span>
                 {examWk && (
-                  <span className="rounded bg-rose-100 px-1 py-0.5 text-[9px] font-semibold uppercase text-rose-600 dark:bg-rose-950/50 dark:text-rose-300">
+                  <span className="rounded bg-yellow-200 px-1 py-0.5 text-[9px] font-semibold uppercase text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-200">
                     {examWeekLabel(s.id).replace(' exams', '')}
                   </span>
                 )}

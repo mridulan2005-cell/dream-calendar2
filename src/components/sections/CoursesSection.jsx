@@ -10,8 +10,8 @@ import {
   courseDisciplineCode,
 } from '../../logic/timetable.js'
 import CourseFilters from '../CourseFilters.jsx'
+import AddCourseModal from '../AddCourseModal.jsx'
 import SectionHeader from './SectionHeader.jsx'
-import StatusFilter from './StatusFilter.jsx'
 
 const programLabel = (cohort) =>
   PROGRAMS.find((p) => p.id === courseProgram(cohort))?.label || cohort
@@ -24,7 +24,7 @@ const DISCIPLINES = Object.values(DISCIPLINE_LABEL)
 export default function CoursesSection() {
   const { courses, workflow, finaliseCourses, removeCourse, addCourse } = useApp()
   const [filter, setFilter] = useState({ program: '', sub: '', query: '' })
-  const [status, setStatus] = useState('all') // all | allotted | unallotted
+  const [adding, setAdding] = useState(false) // "Add a new course" modal
   const [disc, setDisc] = useState({}) // local discipline overrides, by course id
   // For the running-courses list, "allotted" = fully set up (faculty + slots + venue).
   const isAllotted = (c) => c.faculty.length > 0 && c.slots.length > 0 && !!c.venue
@@ -40,28 +40,9 @@ export default function CoursesSection() {
     [courses, filter, q],
   )
   const allottedCount = list.filter(isAllotted).length
-  const counts = { all: list.length, allotted: allottedCount, unallotted: list.length - allottedCount }
-  const shown =
-    status === 'all' ? list : list.filter((c) => (status === 'allotted' ? isAllotted(c) : !isAllotted(c)))
 
   const discOf = (c) =>
     disc[c.id] ?? (courseDisciplineCode(c.cohort) ? DISCIPLINE_LABEL[courseDisciplineCode(c.cohort)] : '')
-
-  const addNew = () =>
-    addCourse({
-      id: `NEW-${Date.now()}`,
-      code: 'DE ___',
-      title: 'New course',
-      type: 'Core',
-      credits: 4,
-      cohort: 'BDes 1',
-      year: 'B.Des. 1 year',
-      faculty: [],
-      venue: '',
-      slots: [],
-      durationWeeks: 1,
-      dateRanges: [],
-    })
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -99,15 +80,14 @@ export default function CoursesSection() {
       <div className="mt-5 flex items-center gap-4">
         <CourseFilters value={filter} onChange={setFilter} searchPlaceholder="Search a course code or name" />
         <button
-          onClick={addNew}
+          onClick={() => setAdding(true)}
           className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:text-slate-200"
         >
           <Plus size={15} /> Add a new course
         </button>
       </div>
 
-      <div className="mt-4 flex items-center justify-between">
-        <StatusFilter value={status} onChange={setStatus} counts={counts} />
+      <div className="mt-4 flex items-center justify-end">
         <span className="text-xs text-slate-400">
           <b className="text-slate-600 dark:text-slate-300">{allottedCount}</b> of {list.length} fully
           allotted
@@ -116,7 +96,7 @@ export default function CoursesSection() {
 
       {/* Cards */}
       <div className="mt-3 space-y-3 pb-4">
-        {shown.map((c) => (
+        {list.map((c) => (
           <div
             key={c.id}
             className="flex items-center gap-5 rounded-2xl border border-slate-200 bg-white px-5 py-4 transition hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900"
@@ -168,12 +148,14 @@ export default function CoursesSection() {
             </button>
           </div>
         ))}
-        {shown.length === 0 && (
+        {list.length === 0 && (
           <p className="rounded-xl border border-dashed border-slate-200 py-10 text-center text-sm text-slate-400 dark:border-slate-800">
             No courses in this view.
           </p>
         )}
       </div>
+
+      {adding && <AddCourseModal onClose={() => setAdding(false)} onAdd={addCourse} />}
     </div>
   )
 }

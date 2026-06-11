@@ -191,9 +191,36 @@ function ClashCard({ clash, selected, onOpen }) {
 }
 
 // --- Change requests ---------------------------------------------------------
-// Pending cards reveal Edit / Reject only on hover (kept calm at rest). Reject
-// opens an inline reason field that must be filled before confirming.
-function RequestCard({ req, selected, onSelect, onReject, onStartEdit }) {
+// An icon-only action button that expands to reveal its text label when hovered
+// (the "expanding pill" pattern). At rest it's a compact icon square; pointing
+// at it slides the word out — so the row of Apply / Edit / Reject stays calm and
+// uncluttered until the user reaches for one.
+const PILL_TONE = {
+  green:
+    'text-green-600 hover:border-green-400 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-950/30',
+  accent: 'text-slate-600 hover:border-accent hover:text-accent dark:text-slate-300',
+  red: 'text-slate-600 hover:border-red-400 hover:text-red-600 dark:text-slate-300',
+}
+function ActionPill({ icon: Icon, label, tone, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className={`group/pill flex items-center rounded-md border border-slate-300 px-1.5 py-1 transition-all duration-200 dark:border-slate-700 ${PILL_TONE[tone]}`}
+    >
+      <Icon size={13} className="shrink-0" />
+      <span className="max-w-0 overflow-hidden whitespace-nowrap text-[11px] font-medium opacity-0 transition-all duration-200 group-hover/pill:ml-1 group-hover/pill:max-w-[64px] group-hover/pill:opacity-100">
+        {label}
+      </span>
+    </button>
+  )
+}
+
+// Pending cards reveal Apply / Edit / Reject only on hover (kept calm at rest).
+// Reject opens an inline reason field that must be filled before confirming.
+function RequestCard({ req, selected, onSelect, onAccept, onReject, onStartEdit }) {
   const [rejecting, setRejecting] = useState(false)
   const [reason, setReason] = useState('')
 
@@ -229,27 +256,34 @@ function RequestCard({ req, selected, onSelect, onReject, onStartEdit }) {
           </span>
         ) : (
           !rejecting && (
-            <div className="flex shrink-0 gap-1 opacity-0 transition group-hover:opacity-100">
-              <button
+            <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
+              <ActionPill
+                icon={Check}
+                label="Apply"
+                tone="green"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onAccept()
+                }}
+              />
+              <ActionPill
+                icon={Pencil}
+                label="Edit"
+                tone="accent"
                 onClick={(e) => {
                   e.stopPropagation()
                   onStartEdit()
                 }}
-                title="Edit / try a change"
-                className="flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-600 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:text-slate-300"
-              >
-                <Pencil size={12} /> Edit
-              </button>
-              <button
+              />
+              <ActionPill
+                icon={X}
+                label="Reject"
+                tone="red"
                 onClick={(e) => {
                   e.stopPropagation()
                   setRejecting(true)
                 }}
-                title="Reject"
-                className="flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-600 transition hover:border-red-400 hover:text-red-600 dark:border-slate-700 dark:text-slate-300"
-              >
-                <X size={12} /> Reject
-              </button>
+              />
             </div>
           )
         )}
