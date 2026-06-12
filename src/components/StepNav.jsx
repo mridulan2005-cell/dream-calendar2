@@ -1,5 +1,17 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Lock, ChevronLeft, Check, BookOpen, Users, CalendarClock, MapPin, Sparkles } from 'lucide-react'
+import {
+  Lock,
+  ChevronLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Check,
+  BookOpen,
+  Users,
+  CalendarClock,
+  MapPin,
+  Sparkles,
+} from 'lucide-react'
 import ThemeToggle from './ThemeToggle.jsx'
 
 // A meaningful icon per planner step, keyed by step id.
@@ -13,16 +25,76 @@ const STEP_ICONS = {
 
 // Vertical stepper that doubles as the planner's primary navigation.
 // Each item is now a free-access nav item with no visible step number.
+// The rail collapses to a slim icon strip to reclaim horizontal space.
 export default function StepNav({ steps, active, onSelect, stats, progress }) {
   const navigate = useNavigate()
+  const [collapsed, setCollapsed] = useState(false)
+
+  if (collapsed) {
+    return (
+      <aside className="flex w-16 shrink-0 flex-col items-center border-r border-slate-200 bg-slate-50 py-6 dark:border-slate-800 dark:bg-slate-900">
+        <button
+          onClick={() => setCollapsed(false)}
+          title="Expand navigation"
+          aria-label="Expand navigation"
+          className="mb-6 flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+        >
+          <PanelLeftOpen size={18} />
+        </button>
+        <nav className="flex flex-1 flex-col items-center gap-2" aria-label="Planner steps">
+          {steps.map((s) => {
+            const isActive = s.id === active
+            const disabled = s.locked
+            const pending = progress && progress[s.id] && progress[s.id].total - progress[s.id].done > 0
+            return (
+              <button
+                key={s.id}
+                disabled={disabled}
+                aria-current={isActive ? 'step' : undefined}
+                onClick={() => !disabled && onSelect(s.id)}
+                title={s.label}
+                aria-label={s.label}
+                className={`relative flex h-10 w-10 items-center justify-center rounded-xl transition ${
+                  isActive
+                    ? 'bg-accent-soft dark:bg-slate-800'
+                    : disabled
+                      ? 'cursor-not-allowed opacity-40'
+                      : 'hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                }`}
+              >
+                <StepMarker id={s.id} done={s.done} active={isActive} locked={disabled} />
+                {pending && !s.done && (
+                  <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-slate-50 dark:ring-slate-900" />
+                )}
+              </button>
+            )
+          })}
+        </nav>
+        <div className="mt-3">
+          <ThemeToggle collapsed />
+        </div>
+      </aside>
+    )
+  }
+
   return (
     <aside className="flex w-72 shrink-0 flex-col border-r border-slate-200 bg-slate-50 px-4 py-6 dark:border-slate-800 dark:bg-slate-900">
-      <button
-        onClick={() => navigate('/experience')}
-        className="mb-6 flex items-center gap-1 px-2 text-xs font-medium text-slate-400 transition hover:text-slate-700 dark:hover:text-slate-200"
-      >
-        <ChevronLeft size={14} /> IITB Experience
-      </button>
+      <div className="mb-6 flex items-center justify-between px-2">
+        <button
+          onClick={() => navigate('/experience')}
+          className="flex items-center gap-1 text-xs font-medium text-slate-400 transition hover:text-slate-700 dark:hover:text-slate-200"
+        >
+          <ChevronLeft size={14} /> IITB Experience
+        </button>
+        <button
+          onClick={() => setCollapsed(true)}
+          title="Collapse navigation"
+          aria-label="Collapse navigation"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+        >
+          <PanelLeftClose size={16} />
+        </button>
+      </div>
 
       <div className="mb-7 border-b border-slate-200 px-2 pb-5 dark:border-slate-800">
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">

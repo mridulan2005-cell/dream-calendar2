@@ -1,8 +1,8 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, AlertTriangle, CheckCircle2, Undo2, Redo2, X } from 'lucide-react'
+import { ArrowLeft, AlertTriangle, CheckCircle2, Undo2, Redo2, X, Download, Check } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
-import { TERM } from '../data/seed.js'
+import { TERM, slotLabel } from '../data/seed.js'
 import { rankDestinations, evaluateCourse } from '../logic/constraints.js'
 import TimetableGrid from '../components/TimetableGrid.jsx'
 import PersonalisedTimetable from '../components/PersonalisedTimetable.jsx'
@@ -220,6 +220,37 @@ export default function DraftTimetable() {
     if (canPublish) publish()
   }
 
+  // Export the timetable built so far as a CSV the coordinator can open in
+  // Excel / Sheets. Everything else auto-saves locally; this is the explicit
+  // "take a copy with me" action.
+  const downloadTimetable = () => {
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const rows = [['Code', 'Title', 'Batch', 'Faculty', 'Venue', 'Weeks']]
+    const sorted = [...courses].sort(
+      (a, b) => a.cohort.localeCompare(b.cohort) || a.code.localeCompare(b.code),
+    )
+    for (const c of sorted) {
+      rows.push([
+        c.code,
+        c.title,
+        c.cohort,
+        c.faculty.join('; '),
+        c.venue || '',
+        c.slots.map(slotLabel).join(' '),
+      ])
+    }
+    const csv = rows.map((r) => r.map(esc).join(',')).join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `timetable-${TERM.semester}-2026-27`.replace(/\s+/g, '-').toLowerCase() + '.csv'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="flex h-full min-w-0 flex-1 overflow-hidden bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       {/* Left: header/controls stay static; only the grid scrolls. */}
@@ -233,6 +264,17 @@ export default function DraftTimetable() {
             <h1 className="text-2xl font-bold">Draft Timetable</h1>
           </div>
           <div className="flex items-center gap-3">
+            <span className="flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-slate-500">
+              <Check size={13} className="text-green-500" /> Auto-saved
+            </span>
+            <button
+              onClick={downloadTimetable}
+              title="Download timetable (CSV)"
+              aria-label="Download timetable"
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:text-slate-300"
+            >
+              <Download size={18} />
+            </button>
             <button
               onClick={onPublish}
               disabled={!canPublish}

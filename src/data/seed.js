@@ -324,6 +324,12 @@ function fillDurations(list) {
 }
 fillDurations(courses)
 
+// Snapshot each course's reconstructed week allotment as its PAST baseline
+// (where it ran last year). The week grid marks exactly these weeks as the
+// optimal places to re-allot the course — constraints permitting — instead of
+// greening every free week. Stays fixed as the draft is edited.
+for (const c of courses) c.prevSlots = [...c.slots]
+
 // --- Change requests raised by faculty against the draft ---
 export const changeRequests = [
   {

@@ -17,8 +17,9 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
-import { slots as allSlots, slotLabel, TERM, cohorts } from '../data/seed.js'
+import { slots as allSlots, slotLabel, TERM, cohorts, facultyPreferences } from '../data/seed.js'
 import { isProtected, isExamWeek, examWeekLabel } from '../data/rules.js'
+import { evaluatePlacement } from '../logic/constraints.js'
 
 const slotOrder = (id) => allSlots.findIndex((s) => s.id === id)
 const joinWeeks = (ids) => ids.map(slotLabel).join(', ')
@@ -42,6 +43,9 @@ function ParallelModal({ slotId, cohort, placing, existing, onConfirm, onExchang
   const canApplyAll = otherWeeks.length > 0
   const existingNames = existing.map((c) => c.code).join(', ')
   const placingNames = placing.map((c) => c.code).join(', ')
+  // No prior occupant: the picks are simply being co-placed into a free week, so
+  // this is just a "do these run in parallel?" confirmation — no swap to offer.
+  const coPlaceOnly = existing.length === 0
 
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onCancel()
@@ -67,17 +71,27 @@ function ParallelModal({ slotId, cohort, placing, existing, onConfirm, onExchang
           </span>
           <div className="min-w-0">
             <h2 id="parallel-title" className="text-base font-semibold text-slate-900 dark:text-white">
-              {slotLabel(slotId)} is already taken
+              {coPlaceOnly ? 'Do these courses run in parallel?' : `${slotLabel(slotId)} is already taken`}
             </h2>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              <b className="text-slate-700 dark:text-slate-200">{existingNames}</b>{' '}
-              {existing.length > 1 ? 'run' : 'runs'} in {slotLabel(slotId)} for {cohort}. What should{' '}
-              <b className="text-slate-700 dark:text-slate-200">{placingNames}</b> do?
+              {coPlaceOnly ? (
+                <>
+                  <b className="text-slate-700 dark:text-slate-200">{placingNames}</b> would share{' '}
+                  {slotLabel(slotId)} for {cohort}. Confirm they meet at the same time.
+                </>
+              ) : (
+                <>
+                  <b className="text-slate-700 dark:text-slate-200">{existingNames}</b>{' '}
+                  {existing.length > 1 ? 'run' : 'runs'} in {slotLabel(slotId)} for {cohort}. What should{' '}
+                  <b className="text-slate-700 dark:text-slate-200">{placingNames}</b> do?
+                </>
+              )}
             </p>
           </div>
         </div>
 
-        {/* Two choices: share the week (parallel) or swap weeks (exchange). */}
+        {/* Share the week (parallel) — and, when an occupant already holds it,
+            the option to swap weeks (exchange) instead. */}
         <div className="mt-5 space-y-2.5 px-6">
           <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
             <button
@@ -116,18 +130,20 @@ function ParallelModal({ slotId, cohort, placing, existing, onConfirm, onExchang
             )}
           </div>
 
-          <button
-            onClick={onExchange}
-            className="flex w-full items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 text-left transition hover:border-accent hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/60"
-          >
-            <ArrowLeftRight size={18} className="mt-0.5 shrink-0 text-slate-500" />
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Exchange places</div>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Swap weeks — {placingNames} takes {slotLabel(slotId)}, {existingNames} moves out.
-              </p>
-            </div>
-          </button>
+          {!coPlaceOnly && (
+            <button
+              onClick={onExchange}
+              className="flex w-full items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 text-left transition hover:border-accent hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/60"
+            >
+              <ArrowLeftRight size={18} className="mt-0.5 shrink-0 text-slate-500" />
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Exchange places</div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Swap weeks — {placingNames} takes {slotLabel(slotId)}, {existingNames} moves out.
+                </p>
+              </div>
+            </button>
+          )}
         </div>
 
         <div className="mt-5 flex justify-end border-t border-slate-100 px-6 py-3 dark:border-slate-800">
@@ -445,6 +461,62 @@ export default function SlotGridEditor() {
   const cohortOccupants = (cohort, slotId) =>
     courses.filter((c) => c.cohort === cohort && c.slots.includes(slotId))
 
+  // --- Placement guidance --------------------------------------------------
+  // While a course is selected (from the list / tray) or actively dragged from
+  // the tray, tint the EMPTY cells of its OWN column to show where it best fits.
+  // The verdict comes from the constraint engine (cohort/faculty/room clashes,
+  // back-to-back, etc.) plus the faculty's submitted availability and the
+  // course's PAST allotment (the exact weeks it ran in last year). Categories:
+  //   optimal (green) — clash-free AND one of the course's past weeks;
+  //   warn   (amber)  — a soft issue (e.g. back-to-back, capacity);
+  //   blocked (red)   — unavailable: protected week, the batch already has a
+  //                     course there, a hard clash, OR a teaching faculty member
+  //                     submitted this week as unavailable.
+  // Free weeks that aren't part of the course's history stay plain white.
+  // Every other cell stays plain white, so the grid only "lights up" the column
+  // you're allotting into. Resolves once the course is full (no room left).
+  const placingCourse = trayDrag ? courses.find((c) => c.id === trayDrag) : focus
+  // A teaching-faculty member flagged this week as unavailable (their submitted
+  // preference), so the course shouldn't be placed here.
+  const facultyUnavailable = (c, slotId) =>
+    c.faculty.some((f) => (facultyPreferences[f]?.blockedSlots || []).includes(slotId))
+  const cellHint = (col, slotId) => {
+    const c = placingCourse
+    if (!c || !inSlotStep) return null
+    const cIsM = !c.slotSystem || c.slotSystem === 'M'
+    if (!cIsM || !matchCol(c, col)) return null
+    if (c.slots.includes(slotId)) return null
+    const room = c.slots.length < (c.durationWeeks || c.slots.length || 1)
+    if (!room) return null
+    if (isProtected(slotId)) return 'blocked'
+    // The batch already has a course this week → can't place (parallel is a
+    // deliberate, separate action confirmed via the modal).
+    const batchTaken = courses.some(
+      (o) => o.id !== c.id && o.cohort === c.cohort && o.slots.includes(slotId),
+    )
+    if (batchTaken) return 'blocked'
+    // Faculty submitted this week as unavailable → red (explicit constraint).
+    if (facultyUnavailable(c, slotId)) return 'blocked'
+    // Full constraint check against the current draft (past allotment of every
+    // other course): hard clashes are red, soft issues amber.
+    const verdict = evaluatePlacement(c, null, slotId, courses)
+    if (verdict.category === 'red' || verdict.category === 'grey') return 'blocked'
+    if (verdict.category === 'amber') return 'warn'
+    // Clash-free: green ONLY the weeks the course ran in last year (its past
+    // allotment). A brand-new course with no history falls back to contiguity.
+    const prev = c.prevSlots && c.prevSlots.length ? c.prevSlots : null
+    if (prev) return prev.includes(slotId) ? 'optimal' : null
+    const idx = slotOrder(slotId)
+    const contiguous =
+      c.slots.length === 0 || c.slots.some((s) => Math.abs(slotOrder(s) - idx) === 1)
+    return contiguous ? 'optimal' : null
+  }
+  const HINT_BG = {
+    optimal: 'bg-green-50 ring-1 ring-inset ring-green-300/60 dark:bg-green-950/30 dark:ring-green-800/50',
+    warn: 'bg-amber-50 dark:bg-amber-950/20',
+    blocked: 'bg-red-50 dark:bg-red-950/20',
+  }
+
   // Commit updates, mirroring each course's new weeks onto its LINKED partners —
   // a joint session (same faculty across batches) moves as one block.
   const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
@@ -715,20 +787,27 @@ export default function SlotGridEditor() {
   // parallel pairing across everyone sharing the week.
   const confirmParallel = ({ applyAll }) => {
     const { slotId, placing: toAdd, existing, move } = pending
-    // Moved-block case: the dragged block slides to its new position and runs
-    // parallel with the occupant (it stays one block — never split).
+    // Moved-block case: the dragged block (one course, or a whole parallel set)
+    // slides to its new position and runs parallel with the occupant. Every
+    // member shifts by the same delta — the block stays intact, never split.
     if (move) {
-      const d = toAdd[0]
       const e = existing[0]
+      const members = (move.group || [toAdd[0].id])
+        .map((id) => courses.find((c) => c.id === id))
+        .filter(Boolean)
+      const memberIds = members.map((m) => m.id)
       pushUpdates([
-        {
-          ...d,
-          slots: move.srcSlots,
-          durationWeeks: move.srcSlots.length,
-          slotSystem: 'M',
-          parallel: [...new Set([...(d.parallel || []), e.id])],
-        },
-        { ...e, parallel: [...new Set([...(e.parallel || []), d.id])] },
+        ...members.map((m) => {
+          const slots = shiftBlock(m, move.delta) || move.srcSlots
+          return {
+            ...m,
+            slots,
+            durationWeeks: slots.length,
+            slotSystem: 'M',
+            parallel: [...new Set([...(m.parallel || []), e.id, ...memberIds.filter((id) => id !== m.id)])],
+          }
+        }),
+        { ...e, parallel: [...new Set([...(e.parallel || []), ...memberIds])] },
       ])
       setPending(null)
       return
@@ -766,11 +845,20 @@ export default function SlotGridEditor() {
     const d = placing[0]
     const e = existing[0]
     if (!d || !e) return setPending(null)
-    // Moved-block case: the two courses simply swap their whole week-sets — both
-    // stay intact as one block each.
+    // Moved-block case: the moving block and the occupant swap whole week-sets.
+    // A parallel set all takes the occupant's weeks (staying parallel); the
+    // occupant takes the block's original weeks. Both stay intact.
     if (move) {
+      const members = (move.group || [d.id])
+        .map((id) => courses.find((c) => c.id === id))
+        .filter(Boolean)
       pushUpdates([
-        { ...d, slots: [...e.slots], durationWeeks: e.slots.length, slotSystem: 'M' },
+        ...members.map((m) => ({
+          ...m,
+          slots: [...e.slots],
+          durationWeeks: e.slots.length,
+          slotSystem: 'M',
+        })),
         { ...e, slots: [...d.slots], durationWeeks: d.slots.length },
       ])
       setPending(null)
@@ -931,6 +1019,9 @@ export default function SlotGridEditor() {
     setSel(null)
     setHoverNested(null)
     if (selectedCourseId) setSelectedCourse(null)
+    // Also drop any multi-selection (e.g. a parallel pair just placed), so the
+    // yellow rings and bulk toolbar clear on an empty-space click.
+    if (selectedCourseIds.length) setSelectedCourses([])
   }
 
   // Shift every week of a course by `delta` rows, keeping it ONE contiguous block
@@ -951,18 +1042,41 @@ export default function SlotGridEditor() {
     const src = courses.find((c) => c.id === d.courseId)
     if (!src || !matchCol(src, targetCol) || isProtected(targetSlotId)) return
     if (src.slots.includes(targetSlotId)) return // dropping on one of its own weeks
-    const srcSlots = shiftBlock(src, slotOrder(targetSlotId) - slotOrder(d.slotId))
+    const delta = slotOrder(targetSlotId) - slotOrder(d.slotId)
+    const srcSlots = shiftBlock(src, delta)
     if (!srcSlots) return // the whole block would run off the grid
-    // Any course the moved block would land on (anywhere in its run, not just the
-    // grabbed week) → ask whether to run parallel or exchange.
+    // A parallel block moves as ONE unit: src plus every parallel partner sharing
+    // its exact week-set. They shift together by the same delta and never split.
+    const groupIds = [
+      src.id,
+      ...(src.parallel || []).filter((id) => {
+        const p = courses.find((c) => c.id === id)
+        return p && sameSet(p.slots, src.slots)
+      }),
+    ]
+    const moved = groupIds
+      .map((id) => courses.find((c) => c.id === id))
+      .filter(Boolean)
+      .map((c) => ({ course: c, slots: shiftBlock(c, delta) }))
+    if (moved.some((m) => !m.slots)) return // a member would run off the grid
+    // Any course OUTSIDE the moving group that the block would land on (anywhere
+    // in its run) → ask whether to run parallel or exchange.
     const occ = courses.find(
-      (c) => c.id !== src.id && matchCol(c, targetCol) && c.slots.some((s) => srcSlots.includes(s)),
+      (c) =>
+        !groupIds.includes(c.id) && matchCol(c, targetCol) && c.slots.some((s) => srcSlots.includes(s)),
     )
     if (occ) {
-      setPending({ slotId: targetSlotId, placing: [src], existing: [occ], move: { srcSlots } })
+      setPending({
+        slotId: targetSlotId,
+        placing: [src],
+        existing: [occ],
+        move: { srcSlots, group: groupIds, delta },
+      })
       return
     }
-    pushUpdates([{ ...src, slots: srcSlots, durationWeeks: srcSlots.length, slotSystem: 'M' }])
+    pushUpdates(
+      moved.map((m) => ({ ...m.course, slots: m.slots, durationWeeks: m.slots.length, slotSystem: 'M' })),
+    )
   }
   // Selection state for one course's cell, used for the sky wash.
   const selStateOf = (c, ri, ci) => {
@@ -1170,6 +1284,10 @@ export default function SlotGridEditor() {
                     } ${mRight ? 'pr-0' : 'pr-1'}`
                     const seamB = mBottom ? 'border-b-transparent' : 'border-b-slate-200 dark:border-b-slate-800'
                     const seamR = mRight ? 'border-r-transparent' : 'border-r-slate-200 dark:border-r-slate-800'
+                    // Placement guidance tints empty cells of the column being
+                    // allotted; filled cells keep their block and stay white.
+                    const hint = cell.length === 0 ? cellHint(col, s.id) : null
+                    const cellBg = hint ? HINT_BG[hint] : 'bg-white dark:bg-slate-950'
                     return (
                       <td
                         key={col}
@@ -1191,9 +1309,9 @@ export default function SlotGridEditor() {
                           else handleDrop(col, s.id)
                         }}
                         onMouseEnter={() => resize && resizeToRow(ri)}
-                        className={`group/cell relative h-14 border-b border-r ${seamB} ${seamR} ${pad} align-middle bg-white transition-all duration-300 ease-out dark:bg-slate-950 ${
-                          // Plain white cells with grid lines; only course blocks are
-                          // filled. A hovered drop target rings in the accent colour.
+                        className={`group/cell relative h-14 border-b border-r ${seamB} ${seamR} ${pad} align-middle ${cellBg} transition-all duration-300 ease-out ${
+                          // Plain white at rest; the column being allotted lights up
+                          // with placement guidance. A hovered drop target rings accent.
                           dragOver === ck(ri, ci) ? 'ring-2 ring-inset ring-accent' : ''
                         }`}
                       >
