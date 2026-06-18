@@ -191,39 +191,203 @@ const C1_SEMESTERS = [
   },
 ]
 
-// Which semesters fall under each year of study.
-export const CURRICULUM_YEARS = [
+// ── M.Des. (2-year postgraduate) curriculum ──────────────────────────────────
+const MDES_SEMESTERS = [
+  {
+    n: 1,
+    totalCredits: 30,
+    entries: [
+      core('DS 601', 'Design Process and Methods', 2, 0, 2, 6),
+      core('DS 611', 'Visual Design and Communication', 1, 0, 3, 6),
+      core('DS 621', 'Design Research Methodology', 2, 0, 0, 4),
+      project('DSP 601', 'Foundation Design Studio', 8),
+      basket('Discipline Studio I', 1, 6, [
+        opt('DS 631', 'Product Design Studio', 6),
+        opt('DS 633', 'Interaction Design Studio', 6),
+        opt('DS 635', 'Visual Communication Studio', 6),
+        opt('DS 637', 'Animation Design Studio', 6),
+      ]),
+    ],
+  },
+  {
+    n: 2,
+    totalCredits: 30,
+    entries: [
+      core('DS 602', 'Human Factors and Ergonomics', 2, 0, 2, 6),
+      core('DS 612', 'Materials, Form and Technology', 1, 0, 3, 6),
+      project('DSP 602', 'Discipline Studio Project', 8),
+      basket('Discipline Studio II', 1, 6, [
+        opt('DS 642', 'Service Design', 6),
+        opt('DS 644', 'Information Design', 6),
+        opt('DS 646', 'Design for Sustainability', 6),
+        opt('DS 648', 'UX and Interface Design', 6),
+      ]),
+      elective('Institute Elective', 4),
+    ],
+  },
+  {
+    n: 3,
+    totalCredits: 24,
+    entries: [
+      project('DSP 701', 'Design Project', 12),
+      basket('Discipline Elective III', 1, 6, [
+        opt('DS 651', 'Advanced Prototyping', 6),
+        opt('DS 653', 'Design Management and Strategy', 6),
+        opt('DS 655', 'Speculative and Critical Design', 6),
+      ]),
+      elective('Institute / Open Elective', 6),
+    ],
+  },
+  {
+    n: 4,
+    totalCredits: 24,
+    entries: [project('DSP 702', 'Graduation Project (Thesis)', 24)],
+  },
+]
+
+// ── Ph.D. (research) programme: coursework, then staged research milestones ───
+const PHD_SEMESTERS = [
+  {
+    n: 1,
+    totalCredits: 12,
+    entries: [
+      core('DS 801', 'Research Methodology in Design', 3, 0, 0, 6),
+      basket('Doctoral Coursework I', 1, 6, [
+        opt('DS 811', 'Advanced Design Theory', 6),
+        opt('DS 813', 'Cognition and Design', 6),
+        opt('DS 815', 'Design and Emerging Technology', 6),
+      ]),
+      mandatory('DSS 801', 'Research Seminar I'),
+    ],
+  },
+  {
+    n: 2,
+    totalCredits: 12,
+    entries: [
+      core('DS 802', 'Comprehensive Examination', 0, 0, 0, 6),
+      basket('Doctoral Coursework II', 1, 6, [
+        opt('DS 821', 'Qualitative Research Methods', 6),
+        opt('DS 823', 'Quantitative Methods and Statistics', 6),
+        opt('DS 825', 'Human–Computer Interaction Research', 6),
+      ]),
+      mandatory('DSS 802', 'Research Seminar II'),
+    ],
+  },
+  {
+    n: 3,
+    totalCredits: 0,
+    entries: [project('DSR 901', 'Research Stage I — Proposal Defense (APS)', 0)],
+  },
+  {
+    n: 4,
+    totalCredits: 0,
+    entries: [project('DSR 902', 'Research Stage II — Mid-term Review', 0)],
+  },
+  {
+    n: 5,
+    totalCredits: 0,
+    entries: [project('DSR 903', 'Research Stage III — Pre-synopsis Seminar', 0)],
+  },
+  {
+    n: 6,
+    totalCredits: 0,
+    entries: [project('DSR 904', 'Research Stage IV — Thesis Submission and Defense', 0)],
+  },
+]
+
+// Which semesters fall under each year of study, per programme.
+const BDES_YEARS = [
   { year: 1, label: 'Year 1', sems: [1, 2] },
   { year: 2, label: 'Year 2', sems: [3, 4] },
   { year: 3, label: 'Year 3', sems: [5, 6] },
   { year: 4, label: 'Year 4', sems: [7, 8] },
 ]
+const MDES_YEARS = [
+  { year: 1, label: 'Year 1', sems: [1, 2] },
+  { year: 2, label: 'Year 2', sems: [3, 4] },
+]
+const PHD_YEARS = [
+  { year: 1, label: 'Year 1 · Coursework', sems: [1, 2] },
+  { year: 2, label: 'Year 2 · Research', sems: [3, 4] },
+  { year: 3, label: 'Year 3 · Research', sems: [5, 6] },
+]
 
-export const CURRICULUM_PROGRAM = { id: 'BDes', label: 'B.Des.', totalCredits: 272 }
+// Ordered list of programmes for the top-level programme filter.
+export const PROGRAMME_IDS = ['BDes', 'MDes', 'PhD']
 
-// The seeded knowledge layer: one approved version (the 2025 Revision) and the
-// BDes batches currently in the institute, each mapped to the version that
-// applies to it. `currentSem` is where the batch is this term (odd/autumn term),
-// so the UI can mark completed vs. current vs. upcoming semesters — exactly what
-// a student needs to see beyond their graded past semesters.
+// The seeded knowledge layer — one entry per programme. Each programme carries
+// its own meta, year grouping, curriculum versions and enrolled batches, so the
+// page can swap the entire view (filter chips + content) when the programme
+// changes. `currentSem` is where a batch is this (autumn) term, so the UI marks
+// completed vs. current vs. upcoming semesters; a `currentSem` past `maxSem`
+// means the batch has graduated.
 export const SEED_CURRICULUM = {
-  activeVersionId: 'C1',
-  versions: {
-    C1: {
-      id: 'C1',
-      label: '2025 Revision',
-      effectiveFromYear: 2025,
-      approved: true,
-      note: 'Approved curriculum, effective for the 2025 batch onward.',
-      semesters: C1_SEMESTERS,
+  BDes: {
+    program: { id: 'BDes', label: 'B.Des.', durationLabel: '4-year programme', totalCredits: 272 },
+    years: BDES_YEARS,
+    maxSem: 8,
+    activeVersionId: 'C1',
+    versions: {
+      C1: {
+        id: 'C1',
+        label: '2025 Revision',
+        effectiveFromYear: 2025,
+        approved: true,
+        note: 'Approved curriculum, effective for the 2025 batch onward.',
+        semesters: C1_SEMESTERS,
+      },
     },
+    batches: [
+      { id: '2022', label: '2022–2026', admitYear: 2022, standing: 4, currentSem: 7, versionId: 'C1' },
+      { id: '2023', label: '2023–2027', admitYear: 2023, standing: 3, currentSem: 5, versionId: 'C1' },
+      { id: '2024', label: '2024–2028', admitYear: 2024, standing: 2, currentSem: 3, versionId: 'C1' },
+      { id: '2025', label: '2025–2029', admitYear: 2025, standing: 1, currentSem: 1, versionId: 'C1' },
+    ],
   },
-  batches: [
-    { id: '2022', label: '2022–2026', admitYear: 2022, standing: 4, currentSem: 7, versionId: 'C1' },
-    { id: '2023', label: '2023–2027', admitYear: 2023, standing: 3, currentSem: 5, versionId: 'C1' },
-    { id: '2024', label: '2024–2028', admitYear: 2024, standing: 2, currentSem: 3, versionId: 'C1' },
-    { id: '2025', label: '2025–2029', admitYear: 2025, standing: 1, currentSem: 1, versionId: 'C1' },
-  ],
+  MDes: {
+    program: { id: 'MDes', label: 'M.Des.', durationLabel: '2-year programme', totalCredits: 108 },
+    years: MDES_YEARS,
+    maxSem: 4,
+    activeVersionId: 'M1',
+    versions: {
+      M1: {
+        id: 'M1',
+        label: '2024 Curriculum',
+        effectiveFromYear: 2024,
+        approved: true,
+        note: 'Approved curriculum, effective for the 2024 batch onward.',
+        semesters: MDES_SEMESTERS,
+      },
+    },
+    batches: [
+      { id: '2023', label: '2023–2025', admitYear: 2023, standing: 3, currentSem: 5, versionId: 'M1' },
+      { id: '2024', label: '2024–2026', admitYear: 2024, standing: 2, currentSem: 3, versionId: 'M1' },
+      { id: '2025', label: '2025–2027', admitYear: 2025, standing: 1, currentSem: 1, versionId: 'M1' },
+    ],
+  },
+  PhD: {
+    program: { id: 'PhD', label: 'Ph.D.', durationLabel: 'Research programme', totalCredits: 24 },
+    years: PHD_YEARS,
+    maxSem: 6,
+    activeVersionId: 'P1',
+    versions: {
+      P1: {
+        id: 'P1',
+        label: '2022 Framework',
+        effectiveFromYear: 2022,
+        approved: true,
+        note: 'Approved doctoral framework, effective for the 2022 batch onward.',
+        semesters: PHD_SEMESTERS,
+      },
+    },
+    batches: [
+      { id: '2021', label: '2021–', admitYear: 2021, standing: 5, currentSem: 9, versionId: 'P1' },
+      { id: '2022', label: '2022–', admitYear: 2022, standing: 4, currentSem: 7, versionId: 'P1' },
+      { id: '2023', label: '2023–', admitYear: 2023, standing: 3, currentSem: 5, versionId: 'P1' },
+      { id: '2024', label: '2024–', admitYear: 2024, standing: 2, currentSem: 3, versionId: 'P1' },
+      { id: '2025', label: '2025–', admitYear: 2025, standing: 1, currentSem: 1, versionId: 'P1' },
+    ],
+  },
 }
 
 // Total credits a basket / elective / entry contributes (pick-aware).

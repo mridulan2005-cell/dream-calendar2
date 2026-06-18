@@ -1,10 +1,12 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Share2, ArrowRight } from 'lucide-react'
+import { Share2, ArrowRight, Info } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
 import { progress } from '../logic/timetable.js'
 import { TERM } from '../data/seed.js'
+import Sidebar from '../components/Sidebar.jsx'
 import StepNav from '../components/StepNav.jsx'
+import { buildSteps } from '../logic/plannerSteps.js'
 import CoursesSection from '../components/sections/CoursesSection.jsx'
 import FacultySection from '../components/sections/FacultySection.jsx'
 import SlotSection from '../components/sections/SlotSection.jsx'
@@ -12,39 +14,21 @@ import VenueSection from '../components/sections/VenueSection.jsx'
 import SectionHeader from '../components/sections/SectionHeader.jsx'
 import DraftTimetable from './DraftTimetable.jsx'
 
-const STEPS = [
-  { id: 'courses', n: '01', label: 'Running Courses' },
-  { id: 'faculty', n: '02', label: 'Faculty Allotment' },
-  { id: 'slot', n: '03', label: 'Slot Allotment' },
-  { id: 'venue', n: '04', label: 'Venue Allotment' },
-  { id: 'generate', n: '05', label: 'Master Timetable' },
-]
-
 // The redesigned Department Timetable planner. A single workspace: a vertical
 // stepper on the left (primary nav) and the active section on the right. All
 // planner steps are accessible from the left rail so users can jump freely to
 // courses, faculty, slot, venue, or generate at any time.
 export default function Workspace() {
   const { courses, workflow, conflicts, generate, activeStep, setActiveStep } = useApp()
+  const navigate = useNavigate()
   const active = activeStep
   const setActive = setActiveStep
 
   const p = progress(courses)
   const conflictFree = conflicts.conflicts.length === 0
 
-  const coursesDone = workflow.coursesFinalised
-  const facultyDone = workflow.facultyFinalised
   const slotDone = workflow.slotFinalised
-  const venueDone = workflow.venueFinalised
-
-  const doneById = {
-    courses: coursesDone,
-    faculty: facultyDone,
-    slot: slotDone,
-    venue: venueDone,
-    generate: workflow.generated,
-  }
-  const steps = STEPS.map((s) => ({ ...s, locked: false, done: doneById[s.id] }))
+  const steps = buildSteps(workflow)
 
   useEffect(() => {
     if (active === 'generate' && !workflow.generated && slotDone) {
@@ -56,6 +40,7 @@ export default function Workspace() {
 
   return (
     <div className="flex h-full min-h-screen bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      <Sidebar />
       <StepNav
         steps={steps}
         active={active}
@@ -84,9 +69,20 @@ export default function Workspace() {
                 </select>
               </label>
             </div>
-            <button className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-              <Share2 size={15} /> Share access
-            </button>
+            <div className="flex items-center gap-2">
+              {/* The institute slot system (S / L / M) — a constant reference,
+                  opening the editable grid. Sits beside Share access. */}
+              <button
+                onClick={() => navigate('/slot-system')}
+                title="View and edit the institute slot system"
+                className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:text-slate-300 dark:hover:border-accent"
+              >
+                <Info size={15} /> Slot system
+              </button>
+              <button className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                <Share2 size={15} /> Share access
+              </button>
+            </div>
           </header>
 
           {/* Section body */}

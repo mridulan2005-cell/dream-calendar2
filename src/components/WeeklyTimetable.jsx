@@ -38,7 +38,7 @@ const computeBlocks = (courses, cohort) => {
 // down the side) and Day-specific (one day, the chosen batches down the side).
 // In batch-specific you can drag the batch's weekly electives onto a free slot.
 export default function WeeklyTimetable({ focus, courses }) {
-  const { updateCourse } = useApp()
+  const { updateCourse, slotSystem } = useApp()
   const [subView, setSubView] = useState('batch') // 'batch' | 'day'
   const [shown, setShown] = useState([focus.cohort])
   const [day, setDay] = useState('Mon')
@@ -207,6 +207,7 @@ export default function WeeklyTimetable({ focus, courses }) {
                       </th>
                       <PeriodCells
                         day={d}
+                        system={slotSystem}
                         course={studioOf(leadBatch)}
                         electives={placedOf(leadBatch)}
                         onAssign={assign}
@@ -220,7 +221,7 @@ export default function WeeklyTimetable({ focus, courses }) {
                       <th className="border-b border-l border-r border-slate-200 bg-slate-50 px-2 py-2 text-left align-top font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                         {b}
                       </th>
-                      <PeriodCells day={day} course={studioOf(b)} electives={placedOf(b)} clash={clashFor(b)} />
+                      <PeriodCells day={day} system={slotSystem} course={studioOf(b)} electives={placedOf(b)} clash={clashFor(b)} />
                     </tr>
                   ))}
             </tbody>
@@ -281,7 +282,7 @@ export default function WeeklyTimetable({ focus, courses }) {
 // One row of period cells for a (day, course). M periods fuse into the studio
 // cell; every other cell lists the free S / L institute slots, any electives
 // dropped into them, and (in batch view) acts as a drop target.
-function PeriodCells({ day, course, electives = [], clash, onAssign, onUnassign, dragActive }) {
+function PeriodCells({ day, system, course, electives = [], clash, onAssign, onUnassign, dragActive }) {
   const cells = []
   for (let i = 0; i < PERIODS.length; ) {
     const p = PERIODS[i]
@@ -290,9 +291,9 @@ function PeriodCells({ day, course, electives = [], clash, onAssign, onUnassign,
       i++
       continue
     }
-    if (mSlotAt(day, p) && course) {
+    if (mSlotAt(system, day, p) && course) {
       let span = 1
-      while (i + span < PERIODS.length && PERIODS[i + span].kind !== 'lunch' && mSlotAt(day, PERIODS[i + span])) span++
+      while (i + span < PERIODS.length && PERIODS[i + span].kind !== 'lunch' && mSlotAt(system, day, PERIODS[i + span])) span++
       cells.push(
         <td key={p.id} colSpan={span} className={`border-b border-r px-3 py-2 align-top ${STUDIO}`}>
           <div className="font-semibold text-slate-800 dark:text-slate-100">{course.code}</div>
@@ -313,7 +314,7 @@ function PeriodCells({ day, course, electives = [], clash, onAssign, onUnassign,
       )
       i += span
     } else {
-      const { s, l } = freeSlotsAt(day, p)
+      const { s, l } = freeSlotsAt(system, day, p)
       const ids = [...s, ...l]
       const placed = electives.filter((e) => ids.includes(e.weeklySlot))
       const freeIds = ids.filter((id) => !placed.some((e) => e.weeklySlot === id))

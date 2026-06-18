@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import {
   GraduationCap,
   Pencil,
@@ -12,17 +12,14 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  LayoutGrid,
+  LayoutList,
 } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
-import {
-  CURRICULUM_YEARS,
-  CURRICULUM_PROGRAM,
-  entryCredits,
-  semStatus,
-} from '../data/curriculum.js'
+import { PROGRAMME_IDS, entryCredits, semStatus } from '../data/curriculum.js'
 
 const deepClone = (x) => JSON.parse(JSON.stringify(x))
-const yearOfSem = (n) => CURRICULUM_YEARS.find((y) => y.sems.includes(n))?.label || ''
+const yearOfSem = (years, n) => years.find((y) => y.sems.includes(n))?.label || ''
 // Deterministic mock CPI for a completed semester (student perspective only).
 const hash = (s) => {
   let h = 0
@@ -30,6 +27,65 @@ const hash = (s) => {
   return h
 }
 const mockCPI = (batchId, n) => (7.4 + (hash(`${batchId}-${n}`) % 22) / 10).toFixed(2)
+
+// --- Student enrolment mock (student perspective, done/current sems only) -----
+// For the semesters a student has finished or is doing, the curriculum shows
+// what they actually took — not the full catalogue of choices. We resolve each
+// basket to the option(s) they picked and each open-elective slot to a concrete
+// course, deterministically per batch+semester so a given student always sees
+// the same transcript. Grades are filled in for completed semesters.
+const GRADE_POINTS = { AA: 10, AB: 9, BB: 8, BC: 7, CC: 6, CD: 5 }
+// Weighted toward the higher grades, so a transcript reads plausibly.
+const GRADE_POOL = ['AA', 'AA', 'AB', 'AB', 'AB', 'BB', 'BB', 'BB', 'BC', 'CC']
+const mockGrade = (batchId, n, code) => GRADE_POOL[hash(`${batchId}-${n}-${code}-g`) % GRADE_POOL.length]
+
+// A pool of plausible institute / HASMED open electives a student might take.
+const ELECTIVE_POOL = [
+  { code: 'HS 301', name: 'Psychology' },
+  { code: 'HS 447', name: 'Film Appreciation' },
+  { code: 'HS 425', name: 'Introduction to Linguistics' },
+  { code: 'IM 101', name: 'Introduction to Management' },
+  { code: 'HS 215', name: 'Indian English Literature' },
+  { code: 'CS 101', name: 'Computer Programming and Utilization' },
+  { code: 'HS 303', name: 'Philosophy of Mind' },
+  { code: 'EC 101', name: 'Economics' },
+]
+
+// Deterministically pick `basket.pick` of a basket's options for this student.
+const pickBasketOptions = (batchId, n, basket) => {
+  const opts = basket.options || []
+  const count = Math.min(basket.pick || 1, opts.length)
+  return opts
+    .map((o, i) => ({ o, r: hash(`${batchId}-${n}-${basket.title}-${o.code || i}`) }))
+    .sort((a, b) => a.r - b.r)
+    .slice(0, count)
+    .map((x) => x.o)
+}
+
+// Resolve a generic open-elective slot to a concrete course this student took.
+const pickElective = (batchId, n, e) => ELECTIVE_POOL[hash(`${batchId}-${n}-${e.title}`) % ELECTIVE_POOL.length]
+
+// Flatten a semester into the concrete courses a student took: fixed cores and
+// projects as-is, each basket resolved to its picked option(s), each open
+// elective to a concrete course. `from` records the slot a choice came from.
+const studentCourses = (sem, batch) =>
+  sem.entries.flatMap((e) => {
+    if (e.kind === 'core' || e.kind === 'project')
+      return [{ code: e.code, name: e.name, credits: e.credits, kind: e.kind }]
+    if (e.kind === 'basket')
+      return pickBasketOptions(batch.id, sem.n, e).map((o) => ({
+        code: o.code,
+        name: o.name,
+        credits: o.credits ?? e.credits,
+        kind: 'elective',
+        from: e.title,
+      }))
+    if (e.kind === 'elective') {
+      const c = pickElective(batch.id, sem.n, e)
+      return [{ code: c.code, name: c.name, credits: e.credits, kind: 'elective', from: e.title }]
+    }
+    return [] // mandatory handled separately
+  })
 
 // Academic-term label for a given offset from "now" (Aut nowYear). Odd offsets
 // land on Spring, even on Autumn — the same odd/even rhythm as the semesters.
@@ -88,14 +144,21 @@ function diffSem(version, versions, semN) {
 // detail panel on the right that adjusts the matrix (never an overlay).
 export default function Curriculum() {
   const { curriculum, setCurriculum } = useApp()
-  const { versions, batches } = curriculum
 
+  const [programme, setProgramme] = useState('BDes') // 'BDes' | 'MDes' | 'PhD'
   const [filter, setFilter] = useState('all') // 'all' | batchId
-  const [view, setView] = useState('overview') // 'overview' | 'current'
+  const [mode, setMode] = useState('compact') // 'compact' | 'expanded' (display density)
+  const [view, setView] = useState('current') // compact sub-view: 'overview' | 'current'
   const [perspective, setPerspective] = useState('coordinator') // | 'student'
   const [open, setOpen] = useState(null) // { batchId, n } selected for the panel
   const [createOpen, setCreateOpen] = useState(false)
   const [showOlder, setShowOlder] = useState(false)
+
+  // Everything below is scoped to the selected programme: its meta, year
+  // grouping, curriculum versions and enrolled batches.
+  const prog = curriculum[programme]
+  const { versions, batches } = prog
+  const { years, maxSem, program: programMeta } = prog
 
   // Most-recent batch first. The newest RECENT_COUNT batches show by default;
   // anything older sits behind a "view older batches" toggle to stay uncluttered.
@@ -108,8 +171,16 @@ export default function Curriculum() {
 
   const visibleBatches = filter === 'all' ? chipBatches : ordered.filter((b) => b.id === filter)
 
-  // Close the panel when the filter, view or perspective changes.
-  useEffect(() => setOpen(null), [filter, view, perspective])
+  // Close the panel when the filter, view, mode or perspective changes.
+  useEffect(() => setOpen(null), [filter, view, mode, perspective])
+
+  // Switching programme swaps in a different set of batches, so reset the
+  // batch-level UI (filter chip, "older" toggle, open panel) to a clean state.
+  useEffect(() => {
+    setFilter('all')
+    setShowOlder(false)
+    setOpen(null)
+  }, [programme])
 
   // --- Immutable curriculum mutations -------------------------------------
   const updateSemEntries = (versionId, semN, nextEntries) => {
@@ -117,7 +188,10 @@ export default function Curriculum() {
     const nextSems = v.semesters.map((s) => (s.n === semN ? { ...s, entries: nextEntries } : s))
     setCurriculum({
       ...curriculum,
-      versions: { ...versions, [versionId]: { ...v, semesters: nextSems } },
+      [programme]: {
+        ...prog,
+        versions: { ...versions, [versionId]: { ...v, semesters: nextSems } },
+      },
     })
   }
   // Create the curriculum for the next incoming batch: carry the youngest
@@ -125,7 +199,8 @@ export default function Curriculum() {
   // published) so it stays editable until approved. Enrols the new batch and
   // jumps to it.
   const createNextBatch = () => {
-    const newId = `C${Object.keys(versions).length + 1}`
+    const prefix = { BDes: 'C', MDes: 'M', PhD: 'P' }[programme] || 'C'
+    const newId = `${prefix}${Object.keys(versions).length + 1}`
     const base = versions[youngest.versionId]
     const newVersion = {
       id: newId,
@@ -148,8 +223,11 @@ export default function Curriculum() {
     }
     setCurriculum({
       ...curriculum,
-      versions: { ...versions, [newId]: newVersion },
-      batches: [...batches, newBatch],
+      [programme]: {
+        ...prog,
+        versions: { ...versions, [newId]: newVersion },
+        batches: [...batches, newBatch],
+      },
     })
     setFilter(newBatch.id)
     setCreateOpen(false)
@@ -172,23 +250,26 @@ export default function Curriculum() {
           </div>
           <h1 className="mt-1 text-2xl font-bold">Programme Curriculum</h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            {CURRICULUM_PROGRAM.label} · 4-year programme · {CURRICULUM_PROGRAM.totalCredits} credits
+            {programMeta.label} · {programMeta.durationLabel} · {programMeta.totalCredits} credits
           </p>
         </div>
-        <Segmented
-          value={perspective}
-          onChange={setPerspective}
-          options={[
-            { id: 'coordinator', label: 'Coordinator', icon: Pencil },
-            { id: 'student', label: 'Student', icon: GraduationCap },
-          ]}
-        />
+        <div className="flex items-center gap-2.5">
+          <ModeToggle value={mode} onChange={setMode} />
+          <Segmented
+            value={perspective}
+            onChange={setPerspective}
+            options={[
+              { id: 'coordinator', label: 'Coordinator', icon: Pencil },
+              { id: 'student', label: 'Student', icon: GraduationCap },
+            ]}
+          />
+        </div>
       </div>
 
-      {/* View selector */}
+      {/* Programme + display controls */}
       <div className="mt-5 flex flex-wrap items-center gap-2.5">
-        <span className="text-sm font-medium text-slate-500 dark:text-slate-400">Select view</span>
-        <ViewSelect value={view} onChange={setView} />
+        <ProgrammeSelect value={programme} onChange={setProgramme} curriculum={curriculum} />
+        {mode === 'compact' && <ViewSelect value={view} onChange={setView} />}
         <span className="ml-1 hidden items-center gap-3 text-[11px] text-slate-400 sm:flex">
           <span className="flex items-center gap-1">
             <Lock size={11} /> completed
@@ -239,10 +320,20 @@ export default function Curriculum() {
       {/* Active view + in-flow detail panel */}
       <div className="mt-6 flex gap-6">
         <div className="min-w-0 flex-1">
-          {view === 'overview' ? (
+          {mode === 'expanded' ? (
+            <ExpandedView
+              batches={visibleBatches}
+              versions={versions}
+              years={years}
+              perspective={perspective}
+              open={open}
+              onOpen={(batchId, n) => setOpen({ batchId, n })}
+            />
+          ) : view === 'overview' ? (
             <BatchMatrix
               batches={visibleBatches}
               versions={versions}
+              years={years}
               perspective={perspective}
               open={open}
               onOpen={(batchId, n) => setOpen({ batchId, n })}
@@ -251,6 +342,7 @@ export default function Curriculum() {
             <CurrentView
               batches={visibleBatches}
               versions={versions}
+              maxSem={maxSem}
               perspective={perspective}
               open={open}
               onOpen={(batchId, n) => setOpen({ batchId, n })}
@@ -264,6 +356,7 @@ export default function Curriculum() {
             batch={openBatch}
             version={openVersion}
             versions={versions}
+            years={years}
             semester={openSemester}
             perspective={perspective}
             batchesOnVersion={batchesOnOpenVersion}
@@ -287,15 +380,15 @@ export default function Curriculum() {
 }
 
 // ── The matrix: batch rows, semesters in one horizontal stretch by year ──────
-function BatchMatrix({ batches, versions, perspective, open, onOpen }) {
+function BatchMatrix({ batches, versions, years, perspective, open, onOpen }) {
   return (
     <div className="overflow-x-auto pb-2">
       <div className="min-w-max">
         {/* Year group headers, aligned over the semester columns */}
         <div className="flex items-end gap-4">
-          <div className="w-24 shrink-0" />
-          {CURRICULUM_YEARS.map((y) => (
-            <div key={y.year} className="w-[20rem] shrink-0 border-l border-slate-200 pl-4 dark:border-slate-800">
+          <div className="w-28 shrink-0" />
+          {years.map((y) => (
+            <div key={y.year} className="w-[15rem] shrink-0 border-l border-slate-200 pl-4 dark:border-slate-800">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                 {y.label}
               </div>
@@ -309,10 +402,10 @@ function BatchMatrix({ batches, versions, perspective, open, onOpen }) {
           return (
             <div key={b.id} className="mt-3 flex items-stretch gap-4">
               <BatchRowLabel batch={b} version={version} />
-              {CURRICULUM_YEARS.map((y) => (
+              {years.map((y) => (
                 <div
                   key={y.year}
-                  className="flex w-[20rem] shrink-0 gap-2.5 border-l border-slate-200 pl-4 dark:border-slate-800"
+                  className="flex w-[15rem] shrink-0 gap-2.5 border-l border-slate-200 pl-4 dark:border-slate-800"
                 >
                   {y.sems.map((n) => {
                     const sem = version.semesters.find((s) => s.n === n)
@@ -402,9 +495,15 @@ function VersionTag({ version }) {
 }
 
 // Batch row label, shared by the overview matrix and the current timeline.
-function BatchRowLabel({ batch, version }) {
+// In the timeline it stays pinned to the left (`sticky`) so a batch is always
+// identifiable while its semesters scroll horizontally beneath the header.
+function BatchRowLabel({ batch, version, sticky = false }) {
   return (
-    <div className="flex w-24 shrink-0 flex-col justify-center">
+    <div
+      className={`flex w-28 shrink-0 flex-col justify-center ${
+        sticky ? 'sticky left-0 z-20 bg-white pr-2 dark:bg-slate-950' : ''
+      }`}
+    >
       <div className="text-sm font-bold text-slate-800 dark:text-slate-100">Batch {batch.admitYear}</div>
       <div className="text-[10px] text-slate-400">
         {batch.standing > 0 ? `Year ${batch.standing}` : 'Incoming'}
@@ -418,28 +517,60 @@ function BatchRowLabel({ batch, version }) {
   )
 }
 
-// ── Current timeline: semesters aligned by calendar term, "now" centred ──────
-// Columns are academic terms around "now"; each batch's semester sits in the
-// term it actually runs, so every batch's current semester lines up in the
-// highlighted "now" column. Cells before a batch joins read "—"; after Sem 8,
-// "graduated".
-function CurrentView({ batches, versions, perspective, open, onOpen }) {
+// ── Current timeline: semesters aligned by calendar term, scrollable ─────────
+// One continuous timeline: columns are academic terms, each batch's semester
+// sits in the term it actually runs, so every batch's current semester lines up
+// in the highlighted "now" column. The row spans every batch's whole programme
+// (Sem 1 → the most recent batch's Sem 8) and scrolls horizontally. On open it
+// is parked with "now" at the start — just past the pinned batch labels, with a
+// sliver of completed terms peeking in to signal the history scrolls back into
+// view. Cells before a batch joins read "—"; after Sem 8, "graduated".
+const TL_LABEL_PX = 112 // w-28
+const TL_PEEK_PX = 26 // sliver of the past left visible past the labels
+function CurrentView({ batches, versions, maxSem, perspective, open, onOpen }) {
+  const scrollRef = useRef(null)
+  const nowRef = useRef(null)
+
   // The calendar year of the current (autumn) term. Every batch agrees on it:
   // Sem 1 runs in admitYear, and each later semester is half a year on.
   const nowYear = batches.length ? batches[0].admitYear + (batches[0].currentSem - 1) / 2 : 2025
-  const offsets = [-2, -1, 0, 1, 2]
+
+  // Full span of term offsets from "now" (t=0): far enough left to reach the
+  // oldest batch's Sem 1, far enough right to reach the newest batch's Sem 8.
+  // Always include "now" itself so incoming batches still anchor to it.
+  const tMin = Math.min(0, ...batches.map((b) => 1 - b.currentSem))
+  const tMax = Math.max(0, ...batches.map((b) => maxSem - b.currentSem))
+  const offsets = useMemo(() => {
+    const out = []
+    for (let t = tMin; t <= tMax; t++) out.push(t)
+    return out
+  }, [tMin, tMax])
+
+  // Park "now" at the start of the timeline whenever the batch set changes.
+  // Keyed on batch ids (not the array identity) so it doesn't fight the user's
+  // own scrolling on every re-render.
+  const batchKey = batches.map((b) => b.id).join(',')
+  useEffect(() => {
+    const el = scrollRef.current
+    const now = nowRef.current
+    if (!el || !now) return
+    el.scrollLeft +=
+      now.getBoundingClientRect().left - el.getBoundingClientRect().left - TL_LABEL_PX - TL_PEEK_PX
+  }, [batchKey])
+
   return (
-    <div className="overflow-x-auto pb-2">
+    <div ref={scrollRef} className="thin-scroll overflow-x-auto pb-2">
       <div className="min-w-max">
         {/* Term headers */}
         <div className="flex gap-3">
-          <div className="w-24 shrink-0" />
+          <div className="sticky left-0 z-20 w-28 shrink-0 bg-white dark:bg-slate-950" />
           {offsets.map((t) => {
             const now = t === 0
             return (
               <div
                 key={t}
-                className={`w-44 shrink-0 pb-2 text-center text-sm font-semibold ${
+                ref={now ? nowRef : null}
+                className={`w-36 shrink-0 pb-2 text-center text-sm font-semibold ${
                   now ? 'text-accent' : 'text-slate-500 dark:text-slate-400'
                 }`}
               >
@@ -455,13 +586,13 @@ function CurrentView({ batches, versions, perspective, open, onOpen }) {
           const version = versions[b.versionId]
           return (
             <div key={b.id} className="mt-3 flex items-stretch gap-3">
-              <BatchRowLabel batch={b} version={version} />
+              <BatchRowLabel batch={b} version={version} sticky />
               {offsets.map((t) => {
                 const n = b.currentSem + t
                 const sem = version.semesters.find((s) => s.n === n)
                 const now = t === 0
                 return (
-                  <div key={t} className={`relative w-44 shrink-0 ${now ? 'px-px' : ''}`}>
+                  <div key={t} className={`relative w-36 shrink-0 ${now ? 'px-px' : ''}`}>
                     {now && (
                       <span className="pointer-events-none absolute -left-1.5 top-0 h-full w-0.5 rounded bg-accent/70" />
                     )}
@@ -478,7 +609,7 @@ function CurrentView({ batches, versions, perspective, open, onOpen }) {
                       />
                     ) : (
                       <div className="flex h-full min-h-[5.5rem] items-center justify-center rounded-xl border border-dashed border-slate-200 text-xs text-slate-300 dark:border-slate-800 dark:text-slate-600">
-                        {n > 8 ? 'graduated' : '—'}
+                        {n > maxSem ? 'graduated' : '—'}
                       </div>
                     )}
                   </div>
@@ -492,11 +623,171 @@ function CurrentView({ batches, versions, perspective, open, onOpen }) {
   )
 }
 
+// ── Expanded view: every semester's full curriculum, vertically ─────────────
+// The browse-everything counterpart to the compact timeline. Each batch is a
+// section; within it semesters run top-to-bottom (Sem 1 → Sem 8) with their
+// complete course list spelled out inline. A sticky "Jump to" rail mirrors the
+// structure — the current semester carries a tag and the rail tracks whatever
+// section is in view (scroll-spy), so a long page stays navigable with one
+// click. Read-focused: editing still lives in the timeline/overview views.
+function ExpandedView({ batches, versions, years, perspective, open, onOpen }) {
+  const [activeId, setActiveId] = useState(null)
+
+  // Flat, ordered list of every semester section on screen (batch order as
+  // given — most recent first — semesters ascending within each batch).
+  const sections = useMemo(
+    () =>
+      batches.flatMap((b) =>
+        versions[b.versionId].semesters.map((s) => ({ id: `sem-${b.id}-${s.n}`, batchId: b.id, n: s.n })),
+      ),
+    [batches, versions],
+  )
+
+  // Scroll-spy: highlight the rail item for the section nearest the top of the
+  // viewport. The band (rootMargin) keeps a single active item as you scroll.
+  useEffect(() => {
+    const els = sections.map((s) => document.getElementById(s.id)).filter(Boolean)
+    if (!els.length) return
+    const obs = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting)
+        if (!visible.length) return
+        visible.sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
+        setActiveId(visible[0].target.id)
+      },
+      { rootMargin: '-15% 0px -75% 0px', threshold: 0 },
+    )
+    els.forEach((el) => obs.observe(el))
+    return () => obs.disconnect()
+  }, [sections])
+
+  const jumpTo = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const canEdit = perspective === 'coordinator'
+
+  return (
+    <div className="flex gap-6">
+      {/* Jump-to rail (scroll-spy) */}
+      <nav className="sticky top-4 hidden h-fit w-44 shrink-0 self-start lg:block">
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Jump to</div>
+        <div className="mt-2 space-y-3.5">
+          {batches.map((b) => {
+            const batchActive = !!activeId && activeId.startsWith(`sem-${b.id}-`)
+            return (
+            <div key={b.id}>
+              <button
+                onClick={() => jumpTo(`batch-${b.id}`)}
+                className={`mb-1 block w-full text-left text-xs font-bold transition ${
+                  batchActive ? 'text-accent' : 'text-slate-700 hover:text-accent dark:text-slate-200'
+                }`}
+              >
+                Batch {b.admitYear}
+              </button>
+              <div className="border-l border-slate-200 dark:border-slate-800">
+                {versions[b.versionId].semesters.map((s) => {
+                  const id = `sem-${b.id}-${s.n}`
+                  const st = semStatus(b, s.n)
+                  const active = activeId === id
+                  return (
+                    <button
+                      key={id}
+                      onClick={() => jumpTo(id)}
+                      className={`-ml-px flex w-full items-center gap-1.5 border-l-2 py-1 pl-3 text-left text-xs transition ${
+                        active
+                          ? 'border-accent font-semibold text-accent'
+                          : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      <span>Sem {s.n}</span>
+                      {st === 'current' && (
+                        <span className="rounded bg-accent-soft px-1 py-0.5 text-[9px] font-bold uppercase text-accent dark:bg-slate-700 dark:text-slate-200">
+                          Now
+                        </span>
+                      )}
+                      {st === 'done' && <Lock size={10} className="text-slate-300 dark:text-slate-600" />}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            )
+          })}
+        </div>
+      </nav>
+
+      {/* Expanded curriculum, batch by batch */}
+      <div className="min-w-0 flex-1 space-y-10">
+        {batches.map((b) => {
+          const version = versions[b.versionId]
+          return (
+            <section key={b.id} id={`batch-${b.id}`} className="scroll-mt-6">
+              <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2 dark:border-slate-800">
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white">Batch {b.admitYear}</h2>
+                <span className="text-xs text-slate-400">
+                  {b.standing > 0 ? `Year ${b.standing}` : 'Incoming'}
+                </span>
+                <VersionTag version={version} />
+              </div>
+
+              <div className="mt-4 space-y-5">
+                {version.semesters.map((s) => {
+                  const id = `sem-${b.id}-${s.n}`
+                  const status = semStatus(b, s.n)
+                  const diff = diffSem(version, versions, s.n)
+                  const isOpen = open && open.batchId === b.id && open.n === s.n
+                  return (
+                    <div
+                      key={id}
+                      id={id}
+                      className={`scroll-mt-6 rounded-2xl border bg-white p-5 transition dark:bg-slate-900 ${
+                        isOpen
+                          ? 'border-accent ring-2 ring-accent/40'
+                          : status === 'current'
+                            ? 'border-accent/50 ring-1 ring-accent/20'
+                            : 'border-slate-200 dark:border-slate-800'
+                      }`}
+                    >
+                      <div className="mb-3 flex flex-wrap items-center gap-2">
+                        <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                          Semester {s.n}
+                        </h3>
+                        <StatusPill status={status} />
+                        <span className="text-xs text-slate-400">{yearOfSem(years, s.n)}</span>
+                        {diff && diff.changes > 0 && (
+                          <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-700 dark:bg-blue-950/50 dark:text-blue-300">
+                            {diff.changes} changed
+                          </span>
+                        )}
+                        <span className="ml-auto flex items-center gap-2">
+                          <CreditTag credits={s.totalCredits} label="total" />
+                          {canEdit && (
+                            <button
+                              onClick={() => onOpen(b.id, s.n)}
+                              title="Edit this semester"
+                              className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:text-slate-300"
+                            >
+                              <Pencil size={13} /> Edit
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                      <SemReadView sem={s} batch={b} perspective={perspective} status={status} diff={diff} flat />
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function StudentLine({ batch, n, status }) {
   if (status === 'done')
     return (
       <span className="flex items-center gap-1 text-[11px] font-medium text-green-600 dark:text-green-400">
-        <CheckCircle2 size={11} /> CPI {mockCPI(batch.id, n)}
+        <CheckCircle2 size={11} /> SPI {mockCPI(batch.id, n)}
       </span>
     )
   if (status === 'current')
@@ -509,7 +800,7 @@ function StudentLine({ batch, n, status }) {
 }
 
 // ── In-flow detail panel (adjusts the matrix, not an overlay) ────────────────
-function DetailPanel({ batch, version, versions, semester, perspective, batchesOnVersion, onClose, onSave }) {
+function DetailPanel({ batch, version, versions, years, semester, perspective, batchesOnVersion, onClose, onSave }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(() => deepClone(semester.entries))
   const status = semStatus(batch, semester.n)
@@ -541,7 +832,7 @@ function DetailPanel({ batch, version, versions, semester, perspective, batchesO
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
             <span>
-              {yearOfSem(semester.n)} · Batch {batch.admitYear} · {version.label}
+              {yearOfSem(years, semester.n)} · Batch {batch.admitYear} · {version.label}
             </span>
             {!version.approved && (
               <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
@@ -629,7 +920,14 @@ const DIFF_BG = {
   added: 'bg-green-50/70 ring-1 ring-green-200 dark:bg-green-950/20 dark:ring-green-900/50',
   modified: 'bg-amber-50/70 ring-1 ring-amber-200 dark:bg-amber-950/20 dark:ring-amber-900/50',
 }
-function SemReadView({ sem, batch, perspective, status, diff }) {
+function SemReadView({ sem, batch, perspective, status, diff, flat = false }) {
+  // A student looking at a semester they've finished or are doing sees their own
+  // enrolment — the courses they actually took, with grades once it's done —
+  // not the full catalogue of electives. Upcoming sems fall through to the
+  // standard catalogue view below.
+  if (perspective === 'student' && (status === 'done' || status === 'current'))
+    return <StudentSemView sem={sem} batch={batch} status={status} flat={flat} />
+
   const cores = sem.entries.filter((e) => e.kind === 'core' || e.kind === 'project')
   const baskets = sem.entries.filter((e) => e.kind === 'basket')
   const electives = sem.entries.filter((e) => e.kind === 'elective')
@@ -649,7 +947,7 @@ function SemReadView({ sem, batch, perspective, status, diff }) {
           <SectionLabel>Core courses</SectionLabel>
           <div className="mt-1.5 space-y-1">
             {cores.map((e, i) => (
-              <CoreRow key={`${e.code}-${i}`} e={e} st={statusOf(e)} />
+              <CoreRow key={`${e.code}-${i}`} e={e} st={statusOf(e)} flat={flat} />
             ))}
           </div>
         </div>
@@ -677,7 +975,7 @@ function SemReadView({ sem, batch, perspective, status, diff }) {
                     </div>
                     {e.note && <div className="text-[11px] text-slate-400">{e.note}</div>}
                   </div>
-                  <CreditTag credits={e.credits} />
+                  <CreditTag credits={e.credits} flat={flat} />
                 </div>
               )
             })}
@@ -720,7 +1018,103 @@ function SemReadView({ sem, batch, perspective, status, diff }) {
   )
 }
 
-function CoreRow({ e, st }) {
+// ── Student enrolment view (the courses a student took, with grades) ─────────
+// A transcript-style read of one semester from the student's own perspective.
+// Done semesters carry letter grades and an SPI; the current semester reads
+// "in progress". Mandatory (non-credit) requirements sit in a quiet footer.
+function StudentSemView({ sem, batch, status, flat = false }) {
+  const done = status === 'done'
+  const courses = studentCourses(sem, batch)
+  const mandatory = sem.entries.filter((e) => e.kind === 'mandatory')
+  const credits = courses.reduce((sum, c) => sum + (c.credits || 0), 0)
+
+  return (
+    <div className="space-y-4">
+      {done ? (
+        <div className="flex items-center justify-between gap-2 rounded-lg bg-green-50 px-3 py-2.5 dark:bg-green-950/30">
+          <span className="flex items-center gap-2 text-sm font-semibold text-green-700 dark:text-green-300">
+            <CheckCircle2 size={15} /> Completed
+          </span>
+          <span className="flex items-center gap-1 text-sm font-bold text-green-700 dark:text-green-300">
+            SPI {mockCPI(batch.id, sem.n)}
+          </span>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 rounded-lg bg-accent-soft px-3 py-2.5 text-sm font-semibold text-accent dark:bg-slate-800 dark:text-slate-200">
+          <Clock size={15} /> In progress · {credits} credits enrolled
+        </div>
+      )}
+
+      <div>
+        <SectionLabel>{done ? 'Courses & grades' : 'Enrolled courses'}</SectionLabel>
+        <div className="mt-1.5 space-y-1">
+          {courses.map((c, i) => (
+            <div
+              key={`${c.code}-${i}`}
+              className="flex items-center gap-3 rounded-md px-2 py-1.5"
+            >
+              <span className="w-16 shrink-0 text-xs font-bold text-slate-400">{c.code}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-slate-700 dark:text-slate-200">{c.name}</span>
+                {c.from && (
+                  <span className="text-[10px] uppercase tracking-wide text-slate-400">{c.from}</span>
+                )}
+              </span>
+              {done ? (
+                <GradeTag grade={mockGrade(batch.id, sem.n, c.code)} flat={flat} />
+              ) : (
+                <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                  ongoing
+                </span>
+              )}
+              <CreditTag credits={c.credits} flat={flat} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {mandatory.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {mandatory.map((e, i) => (
+            <span
+              key={`${e.code}-${i}`}
+              className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+            >
+              {done ? <Check size={10} className="text-green-600 dark:text-green-400" /> : <Lock size={10} />}{' '}
+              {e.code} · {e.name} (non-credit)
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Letter-grade badge, tinted by grade tier (top grades green, mid accent/amber).
+// `flat` renders it as light, unboxed text — for the scannable expanded view.
+function GradeTag({ grade, flat = false }) {
+  const pts = GRADE_POINTS[grade] ?? 0
+  if (flat) {
+    const text =
+      pts >= 9
+        ? 'text-green-600 dark:text-green-400'
+        : pts >= 7
+          ? 'text-slate-600 dark:text-slate-300'
+          : 'text-amber-600 dark:text-amber-400'
+    return <span className={`w-8 shrink-0 text-right text-sm font-bold tabular-nums ${text}`}>{grade}</span>
+  }
+  const cls =
+    pts >= 9
+      ? 'bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300'
+      : pts >= 7
+        ? 'bg-accent-soft text-accent dark:bg-slate-700 dark:text-slate-200'
+        : 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
+  return (
+    <span className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-bold tabular-nums ${cls}`}>{grade}</span>
+  )
+}
+
+function CoreRow({ e, st, flat = false }) {
   return (
     <div className={`flex items-center gap-3 rounded-md px-2 py-1.5 ${st ? DIFF_BG[st] || '' : ''}`}>
       <span className="w-16 shrink-0 text-xs font-bold text-slate-400">{e.code}</span>
@@ -731,7 +1125,7 @@ function CoreRow({ e, st }) {
           {e.l}-{e.t}-{e.st}
         </span>
       ) : null}
-      <CreditTag credits={e.credits} />
+      <CreditTag credits={e.credits} flat={flat} />
     </div>
   )
 }
@@ -917,7 +1311,7 @@ function CreateBatchModal({ fromBatch, fromVersion, nextYear, onCancel, onConfir
               Create curriculum for Batch {nextYear}?
             </h2>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              It carries forward{' '}
+              It carries forward all eight semesters of{' '}
               <b className="text-slate-700 dark:text-slate-200">Batch {fromBatch.admitYear}</b>'s
               curriculum ({fromVersion.label}) by default. You can edit any semester afterwards.
             </p>
@@ -974,6 +1368,65 @@ function ViewSelect({ value, onChange }) {
   )
 }
 
+// Top-level programme filter (B.Des. / M.Des. / Ph.D.). Switching swaps the
+// whole knowledge layer — the filter chips and content follow.
+function ProgrammeSelect({ value, onChange, curriculum }) {
+  return (
+    <div className="relative">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Programme"
+        className="cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-3.5 pr-9 text-sm font-semibold text-slate-700 outline-none transition hover:border-slate-300 focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+      >
+        {PROGRAMME_IDS.map((id) => (
+          <option key={id} value={id}>
+            {curriculum[id].program.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        size={15}
+        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+      />
+    </div>
+  )
+}
+
+// Compact ⇄ Expanded density toggle. Icon-only, except the active mode also
+// shows its label — same shell as the Coordinator/Student segmented control.
+function ModeToggle({ value, onChange }) {
+  const opts = [
+    { id: 'compact', label: 'Compact', icon: LayoutGrid },
+    { id: 'expanded', label: 'Expanded', icon: LayoutList },
+  ]
+  return (
+    <div className="flex rounded-lg bg-slate-100 p-0.5 dark:bg-slate-800">
+      {opts.map((o) => {
+        const Icon = o.icon
+        const active = value === o.id
+        return (
+          <button
+            key={o.id}
+            onClick={() => onChange(o.id)}
+            title={o.label}
+            aria-label={o.label}
+            aria-pressed={active}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition ${
+              active
+                ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
+                : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+            }`}
+          >
+            <Icon size={15} />
+            {active && <span>{o.label}</span>}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function Segmented({ value, onChange, options }) {
   return (
     <div className="flex rounded-lg bg-slate-100 p-0.5 dark:bg-slate-800">
@@ -1022,7 +1475,13 @@ function StatusPill({ status }) {
   return <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase ${s.cls}`}>{s.label}</span>
 }
 
-function CreditTag({ credits, label }) {
+function CreditTag({ credits, label, flat = false }) {
+  if (flat)
+    return (
+      <span className="shrink-0 text-xs font-medium tabular-nums text-slate-400">
+        {credits} cr{label ? ` ${label}` : ''}
+      </span>
+    )
   return (
     <span className="shrink-0 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
       {credits} cr{label ? ` ${label}` : ''}

@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Info, ChevronDown, CircleAlert, Grid3x3, Search } from 'lucide-react'
+import { ChevronDown, CircleAlert, Grid3x3, Search } from 'lucide-react'
 import { useApp } from '../../store/AppContext.jsx'
 import { TERM, PREV_YEAR, slotLabel, slotSystems, facultyPreferences } from '../../data/seed.js'
 import { progress, pastSlotSystem } from '../../logic/timetable.js'
-import SlotSystemPanel from '../SlotSystemPanel.jsx'
 import SlotPicker from '../SlotPicker.jsx'
 import BatchTabs from '../BatchTabs.jsx'
 import SectionHeader from './SectionHeader.jsx'
@@ -32,7 +31,6 @@ export default function SlotSection() {
   const [facultyTags, setFacultyTags] = useState([]) // empty = show all faculty
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all') // all | allotted | unallotted
-  const [guideOpen, setGuideOpen] = useState(false)
   // Anchor for Shift-range selection. The selection itself lives in the store so
   // the grid window can read it and place every picked course into a week.
   const [lastClicked, setLastClicked] = useState(null)
@@ -139,23 +137,6 @@ export default function SlotSection() {
           </div>
         }
       />
-
-      {/* Slotting-types helper */}
-      <div className="mt-4 flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-900">
-        <span className="text-slate-500 dark:text-slate-400">
-          Not sure about the different slot systems? Explore how each one runs.
-        </span>
-        <button
-          onClick={() => setGuideOpen((o) => !o)}
-          className={`ml-auto flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-medium transition ${
-            guideOpen
-              ? 'border-accent bg-accent-soft text-accent dark:bg-slate-800'
-              : 'border-slate-200 bg-white text-slate-700 hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200'
-          }`}
-        >
-          <Info size={15} /> View slotting types
-        </button>
-      </div>
 
       <div className="mt-5 flex items-start gap-6">
         {/* Left: filters + course cards */}
@@ -363,9 +344,6 @@ export default function SlotSection() {
             )}
           </div>
         </div>
-
-        {/* Right: slotting-types reference panel */}
-        {guideOpen && <SlotSystemPanel onClose={() => setGuideOpen(false)} />}
       </div>
     </div>
   )

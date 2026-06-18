@@ -69,6 +69,20 @@ export const SLOT_M = [
   { id: 'MB', day: 'Fri', start: '14:00', end: '17:00' },
 ]
 
+// The default (seed) slot system — the institute definition transcribed above.
+// At runtime the live system lives in the store (editable on the Slot System
+// page, persisted to localStorage), so every reader works off a passed-in
+// system object rather than these arrays directly.
+export const DEFAULT_SLOT_SYSTEM = { S: SLOT_S, L: SLOT_L, M: SLOT_M }
+
+// A fresh deep clone of the seed — used to seed the store and to "reset to
+// default" without mutating the originals.
+export const cloneSlotSystem = (sys = DEFAULT_SLOT_SYSTEM) => ({
+  S: sys.S.map((s) => ({ ...s, composedOf: s.composedOf ? [...s.composedOf] : undefined })),
+  L: sys.L.map((s) => ({ ...s, composedOf: s.composedOf ? [...s.composedOf] : undefined })),
+  M: sys.M.map((s) => ({ ...s, composedOf: s.composedOf ? [...s.composedOf] : undefined })),
+})
+
 export const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
 
 // Canonical teaching-period columns for the weekly grid. LUNCH is a narrow
@@ -95,18 +109,22 @@ const startsIn = (slot, col) =>
   toMin(slot.start) >= toMin(col.start) && toMin(slot.start) < toMin(col.end)
 
 // The M studio slot covering (day, period), or null. M is what IDC runs in, so
-// these are the cells the running studio fills.
-export function mSlotAt(day, period) {
-  const hit = SLOT_M.find((s) => s.day === day && overlaps(s.start, s.end, period.start, period.end))
+// these are the cells the running studio fills. Reads from the live system.
+export function mSlotAt(system, day, period) {
+  const M = system?.M || SLOT_M
+  const hit = M.find((s) => s.day === day && overlaps(s.start, s.end, period.start, period.end))
   return hit ? hit.id : null
 }
 
 // Free institute slots available at (day, period) — the S/L slots a studio batch
-// isn't using. Returned split so the UI can tone them differently.
-export function freeSlotsAt(day, period) {
+// isn't using. Returned split so the UI can tone them differently. Reads from
+// the live system so edits on the Slot System page flow through here.
+export function freeSlotsAt(system, day, period) {
   if (period.kind === 'lunch') return { s: [], l: [] }
-  const s = SLOT_S.filter((x) => x.day === day && startsIn(x, period)).map((x) => x.id)
-  const l = SLOT_L.filter((x) => x.day === day && startsIn(x, period)).map((x) => x.id)
+  const S = system?.S || SLOT_S
+  const L = system?.L || SLOT_L
+  const s = S.filter((x) => x.day === day && startsIn(x, period)).map((x) => x.id)
+  const l = L.filter((x) => x.day === day && startsIn(x, period)).map((x) => x.id)
   return { s, l }
 }
 

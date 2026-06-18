@@ -4,6 +4,7 @@ import MasterFlow from './pages/MasterFlow.jsx'
 import Curriculum from './pages/Curriculum.jsx'
 import Workspace from './pages/Workspace.jsx'
 import SlotGridEditor from './pages/SlotGridEditor.jsx'
+import SlotSystemEditor from './pages/SlotSystemEditor.jsx'
 
 export default function App() {
   return (
@@ -16,6 +17,8 @@ export default function App() {
       </Route>
       {/* The planner: a full-screen workspace with its own stepper navigation. */}
       <Route path="/planner" element={<Workspace />} />
+      {/* The institute slot system editor — same chrome as the planner. */}
+      <Route path="/slot-system" element={<SlotSystemEditor />} />
       {/* The direct-manipulation week grid — opens in its own state-synced tab. */}
       <Route path="/slot-grid" element={<SlotGridEditor />} />
     </Routes>

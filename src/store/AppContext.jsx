@@ -5,9 +5,27 @@ import {
   sharedAccess as seedShared,
 } from '../data/seed.js'
 import { SEED_CURRICULUM } from '../data/curriculum.js'
+import { DEFAULT_SLOT_SYSTEM, cloneSlotSystem } from '../data/slotSystem.js'
 import { applyOp, detectConflicts } from '../logic/timetable.js'
 
 const AppContext = createContext(null)
+
+// The slot system is the institute "source of truth" (S / L / M). It's editable
+// on the Slot System page and persisted to localStorage so it behaves like the
+// backing file — survives reloads and flows to every surface that fetches it.
+const SLOT_SYSTEM_KEY = 'iitb-slot-system'
+function loadSlotSystem() {
+  if (typeof localStorage === 'undefined') return cloneSlotSystem(DEFAULT_SLOT_SYSTEM)
+  try {
+    const raw = localStorage.getItem(SLOT_SYSTEM_KEY)
+    if (!raw) return cloneSlotSystem(DEFAULT_SLOT_SYSTEM)
+    const parsed = JSON.parse(raw)
+    if (parsed && parsed.S && parsed.L && parsed.M) return parsed
+  } catch {
+    /* fall through to default */
+  }
+  return cloneSlotSystem(DEFAULT_SLOT_SYSTEM)
+}
 
 const initialState = {
   // Slot AND venue allotment start EMPTY: no course has weeks or a room by
@@ -25,6 +43,9 @@ const initialState = {
   // The BDes programme curriculum — the versioned knowledge layer that defines
   // what each batch studies per semester. Editable on the Curriculum page.
   curriculum: SEED_CURRICULUM,
+  // The institute slot system (S / L / M). Editable on the Slot System page;
+  // hydrated from localStorage so edits persist like a backing file.
+  slotSystem: loadSlotSystem(),
   // The course currently being allotted (highlighted in the list, focused in the
   // grid). Synced across tabs so switching course in the planner switches it in
   // the grid too.
@@ -181,6 +202,11 @@ function baseReducer(state, action) {
     case 'SET_CURRICULUM':
       return { ...state, curriculum: action.curriculum }
 
+    // Replace the institute slot system (the Slot System editor computes the
+    // next object immutably). Persisted + broadcast so every surface refetches.
+    case 'SET_SLOT_SYSTEM':
+      return { ...state, slotSystem: action.slotSystem }
+
     // Replace the shared slice with state mirrored from another browser tab
     // (see the BroadcastChannel sync in AppProvider). Not undoable, and never
     // re-broadcast (the `applyingRemote` guard suppresses the echo).
@@ -201,6 +227,17 @@ export function AppProvider({ children }) {
     if (state.theme === 'dark') root.classList.add('dark')
     else root.classList.remove('dark')
   }, [state.theme])
+
+  // Persist the slot system so it behaves like the institute's backing file —
+  // edits survive reloads and are picked up by any surface that reads it.
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return
+    try {
+      localStorage.setItem(SLOT_SYSTEM_KEY, JSON.stringify(state.slotSystem))
+    } catch {
+      /* storage may be unavailable (private mode) — non-fatal */
+    }
+  }, [state.slotSystem])
 
   // --- Global undo / redo shortcuts ---------------------------------------
   // Ctrl/Cmd+Z undoes the last edit; Ctrl/Cmd+V (and the conventional
@@ -256,6 +293,7 @@ export function AppProvider({ children }) {
       selectedCourseId: s.selectedCourseId,
       selectedCourseIds: s.selectedCourseIds,
       activeStep: s.activeStep,
+      slotSystem: s.slotSystem,
     })
     const ch = new BroadcastChannel('timetable-sync')
     channelRef.current = ch
@@ -299,6 +337,7 @@ export function AppProvider({ children }) {
         selectedCourseId: state.selectedCourseId,
         selectedCourseIds: state.selectedCourseIds,
         activeStep: state.activeStep,
+        slotSystem: state.slotSystem,
       },
     })
   }, [
@@ -309,6 +348,7 @@ export function AppProvider({ children }) {
     state.selectedCourseId,
     state.selectedCourseIds,
     state.activeStep,
+    state.slotSystem,
   ])
 
   // Derived: live conflict analysis over the current courses.
@@ -333,6 +373,8 @@ export function AppProvider({ children }) {
       setSelectedCourses: (ids) => dispatch({ type: 'SET_SELECTED_COURSES', ids }),
       setActiveStep: (step) => dispatch({ type: 'SET_ACTIVE_STEP', step }),
       setCurriculum: (curriculum) => dispatch({ type: 'SET_CURRICULUM', curriculum }),
+      updateSlotSystem: (slotSystem) => dispatch({ type: 'SET_SLOT_SYSTEM', slotSystem }),
+      resetSlotSystem: () => dispatch({ type: 'SET_SLOT_SYSTEM', slotSystem: cloneSlotSystem() }),
       removeCourse: (id) => dispatch({ type: 'REMOVE_COURSE', id }),
       addCourse: (course) => dispatch({ type: 'ADD_COURSE', course }),
       generate: () => dispatch({ type: 'GENERATE' }),
