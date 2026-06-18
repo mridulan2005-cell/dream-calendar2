@@ -4,6 +4,7 @@ import {
   changeRequests as seedRequests,
   sharedAccess as seedShared,
 } from '../data/seed.js'
+import { SEED_CURRICULUM } from '../data/curriculum.js'
 import { applyOp, detectConflicts } from '../logic/timetable.js'
 
 const AppContext = createContext(null)
@@ -21,6 +22,9 @@ const initialState = {
   })),
   changeRequests: seedRequests,
   sharedAccess: seedShared,
+  // The BDes programme curriculum — the versioned knowledge layer that defines
+  // what each batch studies per semester. Editable on the Curriculum page.
+  curriculum: SEED_CURRICULUM,
   // The course currently being allotted (highlighted in the list, focused in the
   // grid). Synced across tabs so switching course in the planner switches it in
   // the grid too.
@@ -171,6 +175,11 @@ function baseReducer(state, action) {
 
     case 'SET_ACTIVE_STEP':
       return { ...state, activeStep: action.step }
+
+    // Replace the whole curriculum knowledge layer (the Curriculum page computes
+    // the next object immutably: edits, new versions, batch reassignments).
+    case 'SET_CURRICULUM':
+      return { ...state, curriculum: action.curriculum }
 
     // Replace the shared slice with state mirrored from another browser tab
     // (see the BroadcastChannel sync in AppProvider). Not undoable, and never
@@ -323,6 +332,7 @@ export function AppProvider({ children }) {
       setSelectedCourse: (id) => dispatch({ type: 'SET_SELECTED_COURSE', id }),
       setSelectedCourses: (ids) => dispatch({ type: 'SET_SELECTED_COURSES', ids }),
       setActiveStep: (step) => dispatch({ type: 'SET_ACTIVE_STEP', step }),
+      setCurriculum: (curriculum) => dispatch({ type: 'SET_CURRICULUM', curriculum }),
       removeCourse: (id) => dispatch({ type: 'REMOVE_COURSE', id }),
       addCourse: (course) => dispatch({ type: 'ADD_COURSE', course }),
       generate: () => dispatch({ type: 'GENERATE' }),

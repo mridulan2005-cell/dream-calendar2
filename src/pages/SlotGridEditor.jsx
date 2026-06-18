@@ -20,6 +20,7 @@ import { useApp } from '../store/AppContext.jsx'
 import { slots as allSlots, slotLabel, TERM, cohorts, facultyPreferences } from '../data/seed.js'
 import { isProtected, isExamWeek, examWeekLabel } from '../data/rules.js'
 import { evaluatePlacement } from '../logic/constraints.js'
+import WeeklyTimetable from '../components/WeeklyTimetable.jsx'
 
 const slotOrder = (id) => allSlots.findIndex((s) => s.id === id)
 const joinWeeks = (ids) => ids.map(slotLabel).join(', ')
@@ -332,6 +333,9 @@ export default function SlotGridEditor() {
   // course under the faculty teaching it, so you see each person's week as you
   // allot. Parallel/clash semantics stay batch-based (it's about students).
   const [view, setView] = useState('batch')
+  // The grid window shows either the semester timeline (weeks × batches) or the
+  // weekly view (the institute slot system, with the running studio in M slots).
+  const [gridMode, setGridMode] = useState('semester')
 
   // The active course follows the planner's selection, falling back to the URL.
   const activeId = selectedCourseId || focusId
@@ -1119,29 +1123,53 @@ export default function SlotGridEditor() {
           </h1>
         </div>
 
-        {/* Group the grid's columns by batch, faculty, or — once venue allotment
-            is under way — venue (the room timetable). */}
-        <div className="flex rounded-lg bg-slate-100 p-0.5 text-sm dark:bg-slate-800">
-          {[
-            { id: 'batch', label: 'By batch' },
-            { id: 'faculty', label: 'By faculty' },
-            ...(venueReady ? [{ id: 'venue', label: 'By venue' }] : []),
-          ].map((o) => (
-            <button
-              key={o.id}
-              onClick={() => {
-                setView(o.id)
-                clearSel()
-              }}
-              className={`rounded-md px-3 py-1.5 font-medium transition ${
-                view === o.id
-                  ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
-                  : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
-              }`}
-            >
-              {o.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Semester timeline vs. the institute weekly view. */}
+          <div className="flex rounded-lg bg-slate-100 p-0.5 text-sm dark:bg-slate-800">
+            {[
+              { id: 'semester', label: 'Semester' },
+              { id: 'weekly', label: 'Weekly' },
+            ].map((o) => (
+              <button
+                key={o.id}
+                onClick={() => setGridMode(o.id)}
+                className={`rounded-md px-3 py-1.5 font-medium transition ${
+                  gridMode === o.id
+                    ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
+                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Group the semester grid's columns by batch, faculty, or — once venue
+              allotment is under way — venue (the room timetable). */}
+          {gridMode === 'semester' && (
+            <div className="flex rounded-lg bg-slate-100 p-0.5 text-sm dark:bg-slate-800">
+              {[
+                { id: 'batch', label: 'By batch' },
+                { id: 'faculty', label: 'By faculty' },
+                ...(venueReady ? [{ id: 'venue', label: 'By venue' }] : []),
+              ].map((o) => (
+                <button
+                  key={o.id}
+                  onClick={() => {
+                    setView(o.id)
+                    clearSel()
+                  }}
+                  className={`rounded-md px-3 py-1.5 font-medium transition ${
+                    view === o.id
+                      ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
+                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </header>
 
@@ -1166,6 +1194,9 @@ export default function SlotGridEditor() {
         </div>
       )}
 
+      {gridMode === 'weekly' && <WeeklyTimetable focus={focus} courses={courses} />}
+
+      {gridMode === 'semester' && (
       <div className={`overflow-auto p-6 ${inSlotStep ? 'pb-32' : ''}`} onClick={clearSel}>
         <table className="border-separate border-spacing-0 text-xs">
           <thead>
@@ -1487,6 +1518,7 @@ export default function SlotGridEditor() {
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Add-batch menu — portaled to the body so the grid's scroll container
           can't clip it, fixed-positioned under its button. */}
@@ -1618,7 +1650,7 @@ export default function SlotGridEditor() {
 
       {/* Sticky course tray — the focus batch's courses, draggable onto a week.
           Stays pinned while the timetable scrolls; placements sync to the list. */}
-      {inSlotStep && (
+      {inSlotStep && gridMode === 'semester' && (
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-5 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.04)] backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
           <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
             <Layers size={12} /> {focus.cohort} courses

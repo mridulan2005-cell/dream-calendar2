@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { CalendarDays, Image, Users, Star, Folder, FolderClosed } from 'lucide-react'
+import { CalendarDays, Image, Users, Star, Folder, FolderClosed, GraduationCap } from 'lucide-react'
 import ThemeToggle from './ThemeToggle.jsx'
 
 const items = [
@@ -7,6 +7,7 @@ const items = [
   { label: 'Campusites', icon: Image, to: '#campusites' },
   { label: 'IITB Employees', icon: Users, to: '#employees' },
   { label: 'Faculty Members: IDC', icon: Star, to: '#faculty' },
+  { label: 'Programme Curriculum', icon: GraduationCap, to: '/curriculum', primary: true },
   { label: 'Department Timetable', icon: Folder, to: '/planner', primary: true },
   { label: 'Blank', icon: FolderClosed, to: '#blank' },
 ]
