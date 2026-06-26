@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Check, X, ChevronRight, Crosshair, Pencil, CircleAlert } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
-import { describeOp } from '../logic/timetable.js'
+import { describeOp, clashKey } from '../logic/timetable.js'
 import { slotLabel } from '../data/seed.js'
 
 // Right-side review rail with a two-tab switch: faculty Change requests and the
@@ -15,7 +15,7 @@ export default function ChangeRequests({
   onStartEdit,
   onOpenCourse,
 }) {
-  const { changeRequests, conflicts, acceptRequest, rejectRequest } = useApp()
+  const { changeRequests, conflicts, acceptRequest, rejectRequest, dismissClash } = useApp()
   const [collapsed, setCollapsed] = useState(false)
   const listRef = useRef(null)
 
@@ -60,7 +60,7 @@ export default function ChangeRequests({
   }
 
   return (
-    <aside className="sticky top-0 flex h-screen w-[380px] shrink-0 flex-col border-l border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
+    <aside className="sticky top-0 flex h-screen w-[300px] shrink-0 flex-col border-l border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 pt-4 dark:border-slate-800">
         <h2 className="text-sm font-semibold">Review</h2>
         <button
@@ -73,14 +73,14 @@ export default function ChangeRequests({
       </div>
 
       {/* Segmented tab switcher */}
-      <div className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+      <div className="border-b border-slate-200 px-3 py-2.5 dark:border-slate-800">
         <div role="tablist" className="flex gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
           <Tab active={tab === 'requests'} onClick={() => setTab('requests')} label="Change requests" count={pendingCount} tone="amber" />
           <Tab active={tab === 'clashes'} onClick={() => setTab('clashes')} label="Clashes" count={clashes.length} tone="red" />
         </div>
       </div>
 
-      <div ref={listRef} className="thin-scroll flex-1 space-y-3 overflow-y-auto p-4">
+      <div ref={listRef} className="thin-scroll flex-1 space-y-2.5 overflow-y-auto p-3">
         {tab === 'requests' ? (
           changeRequests.length === 0 ? (
             <Empty>No change requests.</Empty>
@@ -106,6 +106,7 @@ export default function ChangeRequests({
               clash={c}
               selected={c.courseIds.includes(selectedCourseId)}
               onOpen={() => onOpenCourse(c.courseIds[0])}
+              onDismiss={() => dismissClash(clashKey(c))}
             />
           ))
         )}
@@ -147,7 +148,7 @@ function dedupeClashes(conflictList) {
   const seen = new Set()
   const out = []
   for (const c of conflictList) {
-    const key = `${[...c.courses].sort().join('|')}|${c.type}|${c.value}|${c.slot}`
+    const key = clashKey(c)
     if (seen.has(key)) continue
     seen.add(key)
     out.push(c)
@@ -164,11 +165,14 @@ function describeClash(clash) {
   return <>Cohort {who} has two overlapping sessions in {week}.</>
 }
 
-function ClashCard({ clash, selected, onOpen }) {
+function ClashCard({ clash, selected, onOpen, onDismiss }) {
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
-      className={`block w-full rounded-2xl border bg-white p-3.5 text-left transition hover:border-slate-300 dark:bg-slate-900 ${
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onOpen()}
+      className={`group block w-full cursor-pointer rounded-2xl border bg-white p-3 text-left transition hover:border-slate-300 dark:bg-slate-900 ${
         selected ? 'border-accent ring-2 ring-accent/30' : 'border-slate-200 dark:border-slate-800'
       }`}
     >
@@ -179,14 +183,30 @@ function ClashCard({ clash, selected, onOpen }) {
           <span className="text-sm font-normal text-slate-400">×</span>
           {clash.courses[1]}
         </span>
-        <span className="shrink-0 rounded-md bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-600 dark:bg-red-950/50 dark:text-red-300">
-          {clash.type}
+        <span className="flex shrink-0 items-center gap-1">
+          <span className="rounded-md bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-600 dark:bg-red-950/50 dark:text-red-300">
+            {clash.type}
+          </span>
+          {onDismiss && (
+            <button
+              type="button"
+              title="Dismiss this clash"
+              aria-label="Dismiss this clash"
+              onClick={(e) => {
+                e.stopPropagation()
+                onDismiss()
+              }}
+              className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 opacity-0 transition hover:bg-slate-100 hover:text-slate-700 focus:opacity-100 group-hover:opacity-100 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+            >
+              <X size={14} />
+            </button>
+          )}
         </span>
       </div>
       <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2.5 text-[13px] leading-snug text-slate-600 dark:bg-slate-800/50 dark:text-slate-300">
         {describeClash(clash)}
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -234,7 +254,7 @@ function RequestCard({ req, selected, onSelect, onAccept, onReject, onStartEdit 
     <div
       data-course={req.courseId}
       onClick={onSelect}
-      className={`group cursor-pointer rounded-2xl border p-3.5 transition ${
+      className={`group cursor-pointer rounded-2xl border p-3 transition ${
         selected
           ? 'border-accent shadow-md ring-2 ring-accent/30'
           : req.status === 'accepted'

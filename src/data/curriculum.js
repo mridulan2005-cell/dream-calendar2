@@ -338,10 +338,10 @@ export const SEED_CURRICULUM = {
       },
     },
     batches: [
-      { id: '2022', label: '2022–2026', admitYear: 2022, standing: 4, currentSem: 7, versionId: 'C1' },
-      { id: '2023', label: '2023–2027', admitYear: 2023, standing: 3, currentSem: 5, versionId: 'C1' },
-      { id: '2024', label: '2024–2028', admitYear: 2024, standing: 2, currentSem: 3, versionId: 'C1' },
-      { id: '2025', label: '2025–2029', admitYear: 2025, standing: 1, currentSem: 1, versionId: 'C1' },
+      { id: '2022', label: '2022–2026', admitYear: 2022, standing: 5, currentSem: 9, versionId: 'C1' },
+      { id: '2023', label: '2023–2027', admitYear: 2023, standing: 4, currentSem: 7, versionId: 'C1' },
+      { id: '2024', label: '2024–2028', admitYear: 2024, standing: 3, currentSem: 5, versionId: 'C1' },
+      { id: '2025', label: '2025–2029', admitYear: 2025, standing: 2, currentSem: 3, versionId: 'C1' },
     ],
   },
   MDes: {
@@ -360,9 +360,9 @@ export const SEED_CURRICULUM = {
       },
     },
     batches: [
-      { id: '2023', label: '2023–2025', admitYear: 2023, standing: 3, currentSem: 5, versionId: 'M1' },
-      { id: '2024', label: '2024–2026', admitYear: 2024, standing: 2, currentSem: 3, versionId: 'M1' },
-      { id: '2025', label: '2025–2027', admitYear: 2025, standing: 1, currentSem: 1, versionId: 'M1' },
+      { id: '2023', label: '2023–2025', admitYear: 2023, standing: 4, currentSem: 7, versionId: 'M1' },
+      { id: '2024', label: '2024–2026', admitYear: 2024, standing: 3, currentSem: 5, versionId: 'M1' },
+      { id: '2025', label: '2025–2027', admitYear: 2025, standing: 2, currentSem: 3, versionId: 'M1' },
     ],
   },
   PhD: {
@@ -381,11 +381,11 @@ export const SEED_CURRICULUM = {
       },
     },
     batches: [
-      { id: '2021', label: '2021–', admitYear: 2021, standing: 5, currentSem: 9, versionId: 'P1' },
-      { id: '2022', label: '2022–', admitYear: 2022, standing: 4, currentSem: 7, versionId: 'P1' },
-      { id: '2023', label: '2023–', admitYear: 2023, standing: 3, currentSem: 5, versionId: 'P1' },
-      { id: '2024', label: '2024–', admitYear: 2024, standing: 2, currentSem: 3, versionId: 'P1' },
-      { id: '2025', label: '2025–', admitYear: 2025, standing: 1, currentSem: 1, versionId: 'P1' },
+      { id: '2021', label: '2021–', admitYear: 2021, standing: 6, currentSem: 11, versionId: 'P1' },
+      { id: '2022', label: '2022–', admitYear: 2022, standing: 5, currentSem: 9, versionId: 'P1' },
+      { id: '2023', label: '2023–', admitYear: 2023, standing: 4, currentSem: 7, versionId: 'P1' },
+      { id: '2024', label: '2024–', admitYear: 2024, standing: 3, currentSem: 5, versionId: 'P1' },
+      { id: '2025', label: '2025–', admitYear: 2025, standing: 2, currentSem: 3, versionId: 'P1' },
     ],
   },
 }

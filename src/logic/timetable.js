@@ -131,6 +131,11 @@ export function facultyWorkload(courses) {
 // student cohort, a teaching-faculty member, or a venue. Returns a list of
 // conflicts plus a Set of course ids and a Set of "courseId@slot" cell keys
 // involved, so the grid can highlight precisely.
+// Stable identity for a clash, used to dedupe the list and to remember the ones
+// a coordinator has dismissed. Keyed on the pair, kind, value and week so the
+// same clash always maps to the same key (and a genuinely new clash doesn't).
+export const clashKey = (c) => `${[...c.courses].sort().join('|')}|${c.type}|${c.value}|${c.slot}`
+
 export function detectConflicts(courses) {
   const conflicts = []
   const conflictCourseIds = new Set()
@@ -177,6 +182,57 @@ export function detectConflicts(courses) {
     }
   }
   return { conflicts, conflictCourseIds, conflictCells }
+}
+
+// --- Timetable change history (vs. last year's carried-over mapping) ---------
+// A new term is pre-populated with last year's timetable: each course keeps its
+// previous weeks (`prevSlots`) and room (`prevVenue`). As the coordinator edits
+// — dragging a course to new weeks, changing a venue, applying a faculty change
+// request — the live course drifts from that baseline. This walks every course
+// and surfaces each drift as a flat, reviewable change, mirroring the
+// curriculum's "View changes". Pure data, newest-meaningful first by code.
+const sameSlots = (a = [], b = []) =>
+  a.length === b.length && [...a].sort().join('|') === [...b].sort().join('|')
+
+export function timetableChanges(courses) {
+  const out = []
+  for (const c of courses) {
+    const prevSlots = c.prevSlots ?? c.slots
+    if (!sameSlots(prevSlots, c.slots)) {
+      out.push({
+        id: `${c.id}:slot`,
+        courseId: c.id,
+        code: c.code,
+        title: c.title,
+        cohort: c.cohort,
+        field: 'slot',
+        fromSlots: prevSlots,
+        toSlots: c.slots,
+      })
+    }
+    const prevVenue = c.prevVenue ?? c.venue
+    if ((prevVenue || '') !== (c.venue || '')) {
+      out.push({
+        id: `${c.id}:venue`,
+        courseId: c.id,
+        code: c.code,
+        title: c.title,
+        cohort: c.cohort,
+        field: 'venue',
+        fromVenue: prevVenue || '',
+        toVenue: c.venue || '',
+      })
+    }
+  }
+  return out.sort((a, b) => a.code.localeCompare(b.code))
+}
+
+// One-line description of a timetable change, using the human slot labels.
+export function describeChange(c) {
+  if (c.field === 'venue') return `Room ${c.fromVenue || '—'} → ${c.toVenue || '—'}`
+  const from = c.fromSlots.map(slotLabel).join(', ') || '—'
+  const to = c.toSlots.map(slotLabel).join(', ') || '—'
+  return `Weeks ${from} → ${to}`
 }
 
 // --- View pivots ---

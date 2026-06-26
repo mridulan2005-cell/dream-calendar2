@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import {
   GraduationCap,
   Pencil,
@@ -6,19 +7,39 @@ import {
   Trash2,
   X,
   Check,
+  Minus,
   CheckCircle2,
   Clock,
   Lock,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  LayoutGrid,
-  LayoutList,
+  GitCompare,
+  RotateCcw,
+  History,
+  ArrowLeft,
 } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
-import { PROGRAMME_IDS, entryCredits, semStatus } from '../data/curriculum.js'
+import { PROGRAMME_IDS, entryCredits, semStatus, SEED_CURRICULUM } from '../data/curriculum.js'
 
 const deepClone = (x) => JSON.parse(JSON.stringify(x))
+
+// Pristine snapshot of every seeded curriculum version, keyed by version id.
+// Edits are immutable, so this stays untouched and serves as the baseline we
+// diff in-place edits against — letting "View changes" surface for ANY batch a
+// coordinator edits, not only a carried-forward new batch (which has basedOn).
+const SEED_VERSIONS = Object.fromEntries(
+  PROGRAMME_IDS.flatMap((pid) => Object.entries(SEED_CURRICULUM[pid].versions)),
+)
+
+// The baseline a version is diffed against: the batch it was carried forward
+// from (live) if it has one, else its own pristine published snapshot.
+function baseOf(version, versions) {
+  if (version?.basedOn && versions[version.basedOn]) {
+    const b = versions[version.basedOn]
+    return { semesters: b.semesters, label: b.label }
+  }
+  const seed = version && SEED_VERSIONS[version.id]
+  if (seed) return { semesters: seed.semesters, label: 'published' }
+  return null
+}
 const yearOfSem = (years, n) => years.find((y) => y.sems.includes(n))?.label || ''
 // Deterministic mock CPI for a completed semester (student perspective only).
 const hash = (s) => {
@@ -34,7 +55,6 @@ const mockCPI = (batchId, n) => (7.4 + (hash(`${batchId}-${n}`) % 22) / 10).toFi
 // basket to the option(s) they picked and each open-elective slot to a concrete
 // course, deterministically per batch+semester so a given student always sees
 // the same transcript. Grades are filled in for completed semesters.
-const GRADE_POINTS = { AA: 10, AB: 9, BB: 8, BC: 7, CC: 6, CD: 5 }
 // Weighted toward the higher grades, so a transcript reads plausibly.
 const GRADE_POOL = ['AA', 'AA', 'AB', 'AB', 'AB', 'BB', 'BB', 'BB', 'BC', 'CC']
 const mockGrade = (batchId, n, code) => GRADE_POOL[hash(`${batchId}-${n}-${code}-g`) % GRADE_POOL.length]
@@ -87,14 +107,6 @@ const studentCourses = (sem, batch) =>
     return [] // mandatory handled separately
   })
 
-// Academic-term label for a given offset from "now" (Aut nowYear). Odd offsets
-// land on Spring, even on Autumn — the same odd/even rhythm as the semesters.
-const termLabel = (nowYear, t) => {
-  const aut = t % 2 === 0
-  const year = aut ? nowYear + t / 2 : nowYear + (t + 1) / 2
-  return `${aut ? 'Aut' : 'Spr'} ${year}`
-}
-
 // --- Curriculum diff (vs. the batch this version was carried forward from) ---
 // A new batch's curriculum is cloned from the last batch, then edited. We surface
 // every change — added / modified / removed entries — against that base so the
@@ -102,9 +114,9 @@ const termLabel = (nowYear, t) => {
 const entryKey = (e) => (e.kind === 'basket' ? `basket:${e.title}` : `${e.kind}:${e.code || e.title}`)
 const entriesEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 function diffSem(version, versions, semN) {
-  const baseId = version?.basedOn
-  if (!baseId || !versions[baseId]) return null
-  const baseSem = versions[baseId].semesters.find((s) => s.n === semN)
+  const base = baseOf(version, versions)
+  if (!base) return null
+  const baseSem = base.semesters.find((s) => s.n === semN)
   const curSem = version.semesters.find((s) => s.n === semN)
   if (!baseSem || !curSem) return null
   const baseMap = new Map(baseSem.entries.map((e) => [entryKey(e), e]))
@@ -129,8 +141,82 @@ function diffSem(version, versions, semN) {
     added,
     modified,
     changes: added + modified + removed.length,
-    baseLabel: versions[baseId].label,
+    baseLabel: base.label,
   }
+}
+
+// Flat list of every change in a batch's curriculum vs. the version it was
+// carried forward from — one item per added / modified / removed entry, across
+// all semesters. Drives the "View changes" panel (revert + unread tracking).
+function batchChanges(version, versions) {
+  const base = baseOf(version, versions)
+  if (!base) return []
+  const out = []
+  for (const curSem of version.semesters) {
+    const baseSem = base.semesters.find((s) => s.n === curSem.n)
+    if (!baseSem) continue
+    const baseMap = new Map(baseSem.entries.map((e) => [entryKey(e), e]))
+    const curMap = new Map(curSem.entries.map((e) => [entryKey(e), e]))
+    for (const e of curSem.entries) {
+      const k = entryKey(e)
+      if (!baseMap.has(k)) out.push(mkChange('added', curSem.n, k, e, null))
+      else if (!entriesEqual(baseMap.get(k), e)) out.push(mkChange('modified', curSem.n, k, e, baseMap.get(k)))
+    }
+    for (const e of baseSem.entries) {
+      if (!curMap.has(entryKey(e))) out.push(mkChange('removed', curSem.n, entryKey(e), null, e))
+    }
+  }
+  // Most recent first: later semesters surface at the top of the panel.
+  return out.sort((a, b) => b.semN - a.semN)
+}
+function mkChange(type, semN, key, cur, base) {
+  const e = cur || base
+  return { id: `${semN}:${type}:${key}`, type, semN, key, cur, base, code: e.code || '', name: e.name || e.title || '' }
+}
+// A one-line, colourless summary of what an entry's change was (panel text).
+const hrsOf = (x) => `${x.l ?? 0}-${x.t ?? 0}-${x.st ?? 0}`
+function changeSummary(c) {
+  if (c.type === 'added') return 'Added'
+  if (c.type === 'removed') return 'Removed'
+  const b = c.base
+  const e = c.cur
+  const bits = []
+  if (b.credits !== e.credits) bits.push(`${b.credits} → ${e.credits} cr`)
+  if (e.kind === 'core' && hrsOf(b) !== hrsOf(e)) bits.push(`${hrsOf(b)} → ${hrsOf(e)}`)
+  if ((b.name || b.title) !== (e.name || e.title)) bits.push('renamed')
+  if (e.kind === 'basket' && b.pick !== e.pick) bits.push(`pick ${b.pick} → ${e.pick}`)
+  return bits.length ? bits.join(' · ') : 'Edited'
+}
+// Diff one save into a flat list of individual entry changes (added / modified /
+// removed) between the semester's previous and next entries. Each becomes one
+// minimal card in the action-history bar.
+function diffEntryChanges(prevEntries, nextEntries, semN) {
+  const prevMap = new Map(prevEntries.map((e) => [entryKey(e), e]))
+  const nextMap = new Map(nextEntries.map((e) => [entryKey(e), e]))
+  const out = []
+  for (const e of nextEntries) {
+    const k = entryKey(e)
+    if (!prevMap.has(k)) out.push(mkChange('added', semN, k, e, null))
+    else if (!entriesEqual(prevMap.get(k), e)) out.push(mkChange('modified', semN, k, e, prevMap.get(k)))
+  }
+  for (const e of prevEntries) if (!nextMap.has(entryKey(e))) out.push(mkChange('removed', semN, entryKey(e), null, e))
+  return out
+}
+
+// A short, lower-case verb/delta for one change — "added", "removed", "renamed",
+// "3 → 4 cr". Mirrors the first-image card's quiet second line.
+function actionLabel(c) {
+  if (c.type === 'added') return 'added'
+  if (c.type === 'removed') return 'removed'
+  const s = changeSummary(c)
+  return s === 'Edited' ? 'edited' : s
+}
+
+// Apply a revert of a single change to a semester's entries.
+function revertEntries(entries, c) {
+  if (c.type === 'added') return entries.filter((e) => entryKey(e) !== c.key)
+  if (c.type === 'removed') return [...entries, c.base]
+  return entries.map((e) => (entryKey(e) === c.key ? c.base : e))
 }
 
 // ── Programme Curriculum ─────────────────────────────────────────────────────
@@ -146,45 +232,49 @@ export default function Curriculum() {
   const { curriculum, setCurriculum } = useApp()
 
   const [programme, setProgramme] = useState('BDes') // 'BDes' | 'MDes' | 'PhD'
-  const [filter, setFilter] = useState('all') // 'all' | batchId
-  const [mode, setMode] = useState('compact') // 'compact' | 'expanded' (display density)
-  const [view, setView] = useState('current') // compact sub-view: 'overview' | 'current'
-  const [perspective, setPerspective] = useState('coordinator') // | 'student'
-  const [open, setOpen] = useState(null) // { batchId, n } selected for the panel
+  const [perspective, setPerspective] = useState('coordinator') // 'coordinator' | 'student'
+  const [selectedBatches, setSelectedBatches] = useState(() =>
+    curriculum.BDes.batches.map((b) => b.id),
+  )
   const [createOpen, setCreateOpen] = useState(false)
-  const [showOlder, setShowOlder] = useState(false)
+  // A running log of edits made this session — each save appends one entry.
+  // Newest first, so the dock reads most-recent → oldest left to right.
+  const [history, setHistory] = useState([])
 
   // Everything below is scoped to the selected programme: its meta, year
   // grouping, curriculum versions and enrolled batches.
   const prog = curriculum[programme]
   const { versions, batches } = prog
-  const { years, maxSem, program: programMeta } = prog
+  const { years, program: programMeta } = prog
 
-  // Most-recent batch first. The newest RECENT_COUNT batches show by default;
-  // anything older sits behind a "view older batches" toggle to stay uncluttered.
-  const RECENT_COUNT = 3
+  const isStudent = perspective === 'student'
+  // Most-recent batch first.
   const ordered = useMemo(() => [...batches].sort((a, b) => b.admitYear - a.admitYear), [batches])
-  const older = ordered.slice(RECENT_COUNT)
-  const chipBatches = showOlder ? ordered : ordered.slice(0, RECENT_COUNT)
   const youngest = ordered[0]
   const nextYear = youngest.admitYear + 1
 
-  const visibleBatches = filter === 'all' ? chipBatches : ordered.filter((b) => b.id === filter)
+  const visibleBatches = ordered.filter((b) => selectedBatches.includes(b.id))
 
-  // Close the panel when the filter, view, mode or perspective changes.
-  useEffect(() => setOpen(null), [filter, view, mode, perspective])
-
-  // Switching programme swaps in a different set of batches, so reset the
-  // batch-level UI (filter chip, "older" toggle, open panel) to a clean state.
+  // Switching programme (or perspective) repopulates the batch picker: a
+  // coordinator sees every batch by default; a student only their own latest.
   useEffect(() => {
-    setFilter('all')
-    setShowOlder(false)
-    setOpen(null)
-  }, [programme])
+    const ids = [...batches].sort((a, b) => b.admitYear - a.admitYear)
+    setSelectedBatches(isStudent ? [ids[0].id] : ids.map((b) => b.id))
+    setCreateOpen(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [programme, perspective])
+
+  const toggleBatch = (id) =>
+    setSelectedBatches((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]))
+  const selectBatch = (id) => setSelectedBatches([id]) // student: single-select
+  const allSelected = selectedBatches.length === ordered.length
+  const toggleAllBatches = () => setSelectedBatches(allSelected ? [] : ordered.map((b) => b.id))
 
   // --- Immutable curriculum mutations -------------------------------------
   const updateSemEntries = (versionId, semN, nextEntries) => {
     const v = versions[versionId]
+    const prevEntries = v.semesters.find((s) => s.n === semN)?.entries || []
+    const changes = diffEntryChanges(prevEntries, nextEntries, semN)
     const nextSems = v.semesters.map((s) => (s.n === semN ? { ...s, entries: nextEntries } : s))
     setCurriculum({
       ...curriculum,
@@ -193,6 +283,22 @@ export default function Curriculum() {
         versions: { ...versions, [versionId]: { ...v, semesters: nextSems } },
       },
     })
+    // Log each individual change as its own minimal card — newest first.
+    if (changes.length) {
+      const batch = batches.find((b) => b.versionId === versionId)
+      const stamp = Date.now()
+      const items = changes.map((c, i) => ({
+        id: `${stamp}-${i}-${c.id}`,
+        batchId: batch?.id,
+        batchLabel: batch?.admitYear ?? v.label,
+        semN,
+        type: c.type,
+        code: c.code,
+        name: c.name,
+        label: actionLabel(c),
+      }))
+      setHistory((h) => [...items, ...h])
+    }
   }
   // Create the curriculum for the next incoming batch: carry the youngest
   // batch's curriculum forward into a fresh version, marked "ongoing" (not yet
@@ -229,19 +335,17 @@ export default function Curriculum() {
         batches: [...batches, newBatch],
       },
     })
-    setFilter(newBatch.id)
+    setSelectedBatches([newBatch.id])
     setCreateOpen(false)
   }
 
-  const openBatch = open && batches.find((b) => b.id === open.batchId)
-  const openVersion = openBatch && versions[openBatch.versionId]
-  const openSemester = openVersion && openVersion.semesters.find((s) => s.n === open.n)
-  const batchesOnOpenVersion = openVersion
-    ? batches.filter((b) => b.versionId === openVersion.id).length
-    : 0
+  const jumpToSem = (h) => {
+    const el = h.batchId && document.getElementById(`sem-${h.batchId}-${h.semN}`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
 
   return (
-    <div className="mx-auto max-w-7xl pb-12">
+    <div className={`mx-auto max-w-7xl ${history.length ? 'pb-32' : 'pb-12'}`}>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -253,115 +357,70 @@ export default function Curriculum() {
             {programMeta.label} · {programMeta.durationLabel} · {programMeta.totalCredits} credits
           </p>
         </div>
-        <div className="flex items-center gap-2.5">
-          <ModeToggle value={mode} onChange={setMode} />
-          <Segmented
-            value={perspective}
-            onChange={setPerspective}
-            options={[
-              { id: 'coordinator', label: 'Coordinator', icon: Pencil },
-              { id: 'student', label: 'Student', icon: GraduationCap },
-            ]}
-          />
-        </div>
+        <Segmented
+          value={perspective}
+          onChange={setPerspective}
+          options={[
+            { id: 'coordinator', label: 'Coordinator', icon: Pencil },
+            { id: 'student', label: 'Student', icon: GraduationCap },
+          ]}
+        />
       </div>
 
-      {/* Programme + display controls */}
-      <div className="mt-5 flex flex-wrap items-center gap-2.5">
-        <ProgrammeSelect value={programme} onChange={setProgramme} curriculum={curriculum} />
-        {mode === 'compact' && <ViewSelect value={view} onChange={setView} />}
-        <span className="ml-1 hidden items-center gap-3 text-[11px] text-slate-400 sm:flex">
-          <span className="flex items-center gap-1">
-            <Lock size={11} /> completed
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="h-2 w-2 rounded-full bg-accent" /> current
-          </span>
-        </span>
-      </div>
+      {/* Programme + batch pickers (dual listbox) */}
+      <div className="mt-5 flex flex-wrap items-start gap-4">
+        <Listbox
+          label="Programme"
+          items={PROGRAMME_IDS.map((id) => ({ id, label: curriculum[id].program.label }))}
+          selected={[programme]}
+          onSelect={setProgramme}
+        />
+        <Listbox
+          label="Batch"
+          multi={!isStudent}
+          items={ordered.map((b) => ({
+            id: b.id,
+            label: `Batch ${b.admitYear}`,
+            hint: versions[b.versionId].approved ? undefined : 'ongoing',
+          }))}
+          selected={selectedBatches}
+          onSelect={isStudent ? selectBatch : toggleBatch}
+          onToggleAll={!isStudent ? toggleAllBatches : undefined}
+        />
 
-      {/* Batch filter chips (most recent first) + create-next-batch CTA */}
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Chip label="All batches" active={filter === 'all'} onClick={() => setFilter('all')} />
-        {chipBatches.map((b) => (
-          <Chip
-            key={b.id}
-            label={`Batch ${b.admitYear}`}
-            active={filter === b.id}
-            onClick={() => setFilter(b.id)}
-          />
-        ))}
-        {older.length > 0 && (
-          <button
-            onClick={() => setShowOlder((v) => !v)}
-            className="flex items-center gap-1 rounded-full px-3 py-1.5 text-sm font-medium text-slate-500 transition hover:text-accent dark:text-slate-400"
-          >
-            {showOlder ? (
-              <>
-                <ChevronLeft size={14} /> Hide older
-              </>
-            ) : (
-              <>
-                View older batches ({older.length}) <ChevronRight size={14} />
-              </>
-            )}
-          </button>
-        )}
-        {perspective === 'coordinator' && (
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="ml-auto flex items-center gap-1.5 rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-95"
-          >
-            <Plus size={15} /> New · Batch {nextYear}
-          </button>
-        )}
-      </div>
-
-      {/* Active view + in-flow detail panel */}
-      <div className="mt-6 flex gap-6">
-        <div className="min-w-0 flex-1">
-          {mode === 'expanded' ? (
-            <ExpandedView
-              batches={visibleBatches}
-              versions={versions}
-              years={years}
-              perspective={perspective}
-              open={open}
-              onOpen={(batchId, n) => setOpen({ batchId, n })}
-            />
-          ) : view === 'overview' ? (
-            <BatchMatrix
-              batches={visibleBatches}
-              versions={versions}
-              years={years}
-              perspective={perspective}
-              open={open}
-              onOpen={(batchId, n) => setOpen({ batchId, n })}
-            />
-          ) : (
-            <CurrentView
-              batches={visibleBatches}
-              versions={versions}
-              maxSem={maxSem}
-              perspective={perspective}
-              open={open}
-              onOpen={(batchId, n) => setOpen({ batchId, n })}
-            />
+        <div className="ml-auto flex flex-col items-end gap-3">
+          {perspective === 'coordinator' && (
+            <button
+              onClick={() => setCreateOpen(true)}
+              className="flex items-center gap-1.5 rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-95"
+            >
+              <Plus size={15} /> New · Batch {nextYear}
+            </button>
           )}
+          <span className="hidden items-center gap-3 text-[11px] text-slate-400 sm:flex">
+            <span className="flex items-center gap-1">
+              <Check size={11} /> completed
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-accent" /> current
+            </span>
+          </span>
         </div>
+      </div>
 
-        {open && openSemester && (
-          <DetailPanel
-            key={`${openVersion.id}-${open.batchId}-${open.n}`}
-            batch={openBatch}
-            version={openVersion}
+      {/* Expanded curriculum */}
+      <div className="mt-6">
+        {visibleBatches.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 py-16 text-center text-sm text-slate-400 dark:border-slate-800">
+            Select a batch to view its curriculum.
+          </div>
+        ) : (
+          <ExpandedView
+            batches={visibleBatches}
             versions={versions}
             years={years}
-            semester={openSemester}
             perspective={perspective}
-            batchesOnVersion={batchesOnOpenVersion}
-            onClose={() => setOpen(null)}
-            onSave={(entries) => updateSemEntries(openVersion.id, open.n, entries)}
+            onSaveSem={updateSemEntries}
           />
         )}
       </div>
@@ -375,106 +434,102 @@ export default function Curriculum() {
           onConfirm={createNextBatch}
         />
       )}
+
+      <VersionHistoryBar history={history} onJump={jumpToSem} onClear={() => setHistory([])} />
     </div>
   )
 }
 
-// ── The matrix: batch rows, semesters in one horizontal stretch by year ──────
-function BatchMatrix({ batches, versions, years, perspective, open, onOpen }) {
-  return (
-    <div className="overflow-x-auto pb-2">
-      <div className="min-w-max">
-        {/* Year group headers, aligned over the semester columns */}
-        <div className="flex items-end gap-4">
-          <div className="w-28 shrink-0" />
-          {years.map((y) => (
-            <div key={y.year} className="w-[15rem] shrink-0 border-l border-slate-200 pl-4 dark:border-slate-800">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                {y.label}
-              </div>
+// ── Action-history bar ───────────────────────────────────────────────────────
+// A docked bar that is part of the viewport, pinned to the very bottom and
+// stretching the full width of the main content area (not a floating overlay).
+// It's portaled to <body> and positioned to track the <main> element's box, so
+// it stays correct when the sidebar collapses. Every edit appends minimal change
+// cards — newest first (leftmost) — chained left by a light arrow, each clickable
+// to jump back to the semester it touched. Layout references the second image.
+function VersionHistoryBar({ history, onJump, onClear }) {
+  // Track the main content area's left/width so the bar spans exactly it.
+  // Guard against no-op updates: returning the previous state when the measured
+  // box is unchanged lets React bail out, which prevents a ResizeObserver →
+  // setState → re-measure feedback loop.
+  const [box, setBox] = useState(null)
+  useEffect(() => {
+    const main = document.querySelector('main')
+    if (!main) return
+    const measure = () => {
+      const r = main.getBoundingClientRect()
+      const left = Math.round(r.left)
+      const width = Math.round(r.width)
+      setBox((prev) => (prev && prev.left === left && prev.width === width ? prev : { left, width }))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(main)
+    window.addEventListener('resize', measure)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [])
+
+  if (!history.length || !box) return null
+
+  return createPortal(
+    <div
+      style={{ left: box.left, width: box.width }}
+      className="fixed bottom-0 z-40 border-t border-slate-200 bg-white shadow-[0_-4px_16px_-8px_rgba(0,0,0,0.15)] dark:border-slate-800 dark:bg-slate-900"
+    >
+      <div className="flex items-center gap-4 px-6 py-2.5">
+        <div className="flex shrink-0 items-center gap-2 text-slate-500 dark:text-slate-400">
+          <History size={15} />
+          <span className="text-[11px] font-semibold uppercase tracking-wide">Action history</span>
+        </div>
+        <div className="thin-scroll flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+          {history.map((h, i) => (
+            <div key={h.id} className="flex shrink-0 items-center gap-1.5">
+              {i > 0 && <ArrowLeft size={14} className="shrink-0 text-slate-300 dark:text-slate-600" />}
+              <ActionCard h={h} onClick={() => onJump(h)} />
             </div>
           ))}
         </div>
-
-        {/* One row per batch */}
-        {batches.map((b) => {
-          const version = versions[b.versionId]
-          return (
-            <div key={b.id} className="mt-3 flex items-stretch gap-4">
-              <BatchRowLabel batch={b} version={version} />
-              {years.map((y) => (
-                <div
-                  key={y.year}
-                  className="flex w-[15rem] shrink-0 gap-2.5 border-l border-slate-200 pl-4 dark:border-slate-800"
-                >
-                  {y.sems.map((n) => {
-                    const sem = version.semesters.find((s) => s.n === n)
-                    return (
-                      <div key={n} className="min-w-0 flex-1">
-                        <SemCell
-                          batch={b}
-                          sem={sem}
-                          version={version}
-                          status={semStatus(b, n)}
-                          active={open && open.batchId === b.id && open.n === n}
-                          perspective={perspective}
-                          diffCount={diffSem(version, versions, n)?.changes || 0}
-                          onClick={() => onOpen(b.id, n)}
-                        />
-                      </div>
-                    )
-                  })}
-                </div>
-              ))}
-            </div>
-          )
-        })}
+        <button
+          onClick={onClear}
+          className="shrink-0 rounded-md px-2 py-1 text-[11px] font-medium text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+        >
+          Clear
+        </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
-// A single semester card in the matrix.
-function SemCell({ batch, sem, version, status, active, perspective, onClick, diffCount = 0 }) {
-  const tone = active
-    ? 'border-accent ring-2 ring-accent/40 bg-white dark:bg-slate-900'
-    : status === 'current'
-      ? 'border-accent/60 ring-1 ring-accent/30 bg-white dark:bg-slate-900'
-      : status === 'done'
-        ? 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/40'
-        : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900'
+function ActionCard({ h, onClick }) {
+  const tone = CHANGE_TONE[h.type] || CHANGE_TONE.modified
+  const removed = h.type === 'removed'
   return (
     <button
       onClick={onClick}
-      className={`flex h-full w-full flex-col gap-1.5 rounded-xl border p-3 text-left transition ${tone}`}
+      title="Jump to this semester"
+      className="flex w-44 shrink-0 flex-col gap-0.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-left transition hover:border-accent dark:border-slate-800 dark:bg-slate-900"
     >
-      <div className="flex items-center justify-between">
-        <span
-          className={`text-sm font-bold ${
-            status === 'done' ? 'text-slate-400 dark:text-slate-500' : 'text-slate-900 dark:text-white'
-          }`}
-        >
-          Sem {sem.n}
-        </span>
-        {status === 'done' ? (
-          <Lock size={12} className="text-slate-400" />
-        ) : status === 'current' ? (
-          <span className="h-2 w-2 rounded-full bg-accent" />
-        ) : null}
-      </div>
-      <div className="flex flex-wrap items-center gap-1">
-        <VersionTag version={version} />
-        {diffCount > 0 && (
-          <span className="inline-flex items-center rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-700 dark:bg-blue-950/50 dark:text-blue-300">
-            {diffCount} changed
+      <div className="flex items-baseline gap-1.5">
+        {h.code && (
+          <span className={`shrink-0 text-[10px] font-bold ${removed ? 'text-red-300 line-through dark:text-red-400/60' : 'text-slate-400'}`}>
+            {h.code}
           </span>
         )}
+        <span
+          className={`truncate text-[12px] ${
+            removed ? 'text-red-400 line-through dark:text-red-400/70' : 'text-slate-700 dark:text-slate-200'
+          }`}
+        >
+          {h.name || h.code}
+        </span>
       </div>
-      {perspective === 'student' ? (
-        <StudentLine batch={batch} n={sem.n} status={status} />
-      ) : (
-        <span className="text-[11px] text-slate-400">{sem.totalCredits} cr</span>
-      )}
+      <div className="text-[10px] text-slate-400">
+        Sem {h.semN} · <span className={`font-medium ${tone}`}>{h.label}</span>
+      </div>
     </button>
   )
 }
@@ -494,133 +549,12 @@ function VersionTag({ version }) {
   )
 }
 
-// Batch row label, shared by the overview matrix and the current timeline.
-// In the timeline it stays pinned to the left (`sticky`) so a batch is always
-// identifiable while its semesters scroll horizontally beneath the header.
-function BatchRowLabel({ batch, version, sticky = false }) {
-  return (
-    <div
-      className={`flex w-28 shrink-0 flex-col justify-center ${
-        sticky ? 'sticky left-0 z-20 bg-white pr-2 dark:bg-slate-950' : ''
-      }`}
-    >
-      <div className="text-sm font-bold text-slate-800 dark:text-slate-100">Batch {batch.admitYear}</div>
-      <div className="text-[10px] text-slate-400">
-        {batch.standing > 0 ? `Year ${batch.standing}` : 'Incoming'}
-      </div>
-      {!version.approved && (
-        <span className="mt-1 inline-flex w-fit items-center rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
-          Ongoing
-        </span>
-      )}
-    </div>
-  )
-}
-
-// ── Current timeline: semesters aligned by calendar term, scrollable ─────────
-// One continuous timeline: columns are academic terms, each batch's semester
-// sits in the term it actually runs, so every batch's current semester lines up
-// in the highlighted "now" column. The row spans every batch's whole programme
-// (Sem 1 → the most recent batch's Sem 8) and scrolls horizontally. On open it
-// is parked with "now" at the start — just past the pinned batch labels, with a
-// sliver of completed terms peeking in to signal the history scrolls back into
-// view. Cells before a batch joins read "—"; after Sem 8, "graduated".
-const TL_LABEL_PX = 112 // w-28
-const TL_PEEK_PX = 26 // sliver of the past left visible past the labels
-function CurrentView({ batches, versions, maxSem, perspective, open, onOpen }) {
-  const scrollRef = useRef(null)
-  const nowRef = useRef(null)
-
-  // The calendar year of the current (autumn) term. Every batch agrees on it:
-  // Sem 1 runs in admitYear, and each later semester is half a year on.
-  const nowYear = batches.length ? batches[0].admitYear + (batches[0].currentSem - 1) / 2 : 2025
-
-  // Full span of term offsets from "now" (t=0): far enough left to reach the
-  // oldest batch's Sem 1, far enough right to reach the newest batch's Sem 8.
-  // Always include "now" itself so incoming batches still anchor to it.
-  const tMin = Math.min(0, ...batches.map((b) => 1 - b.currentSem))
-  const tMax = Math.max(0, ...batches.map((b) => maxSem - b.currentSem))
-  const offsets = useMemo(() => {
-    const out = []
-    for (let t = tMin; t <= tMax; t++) out.push(t)
-    return out
-  }, [tMin, tMax])
-
-  // Park "now" at the start of the timeline whenever the batch set changes.
-  // Keyed on batch ids (not the array identity) so it doesn't fight the user's
-  // own scrolling on every re-render.
-  const batchKey = batches.map((b) => b.id).join(',')
-  useEffect(() => {
-    const el = scrollRef.current
-    const now = nowRef.current
-    if (!el || !now) return
-    el.scrollLeft +=
-      now.getBoundingClientRect().left - el.getBoundingClientRect().left - TL_LABEL_PX - TL_PEEK_PX
-  }, [batchKey])
-
-  return (
-    <div ref={scrollRef} className="thin-scroll overflow-x-auto pb-2">
-      <div className="min-w-max">
-        {/* Term headers */}
-        <div className="flex gap-3">
-          <div className="sticky left-0 z-20 w-28 shrink-0 bg-white dark:bg-slate-950" />
-          {offsets.map((t) => {
-            const now = t === 0
-            return (
-              <div
-                key={t}
-                ref={now ? nowRef : null}
-                className={`w-36 shrink-0 pb-2 text-center text-sm font-semibold ${
-                  now ? 'text-accent' : 'text-slate-500 dark:text-slate-400'
-                }`}
-              >
-                {termLabel(nowYear, t)}
-                {now && <span className="ml-1 font-normal">· now</span>}
-              </div>
-            )
-          })}
-        </div>
-
-        {/* One row per batch */}
-        {batches.map((b) => {
-          const version = versions[b.versionId]
-          return (
-            <div key={b.id} className="mt-3 flex items-stretch gap-3">
-              <BatchRowLabel batch={b} version={version} sticky />
-              {offsets.map((t) => {
-                const n = b.currentSem + t
-                const sem = version.semesters.find((s) => s.n === n)
-                const now = t === 0
-                return (
-                  <div key={t} className={`relative w-36 shrink-0 ${now ? 'px-px' : ''}`}>
-                    {now && (
-                      <span className="pointer-events-none absolute -left-1.5 top-0 h-full w-0.5 rounded bg-accent/70" />
-                    )}
-                    {sem ? (
-                      <SemCell
-                        batch={b}
-                        sem={sem}
-                        version={version}
-                        status={semStatus(b, n)}
-                        active={open && open.batchId === b.id && open.n === n}
-                        perspective={perspective}
-                        diffCount={diffSem(version, versions, n)?.changes || 0}
-                        onClick={() => onOpen(b.id, n)}
-                      />
-                    ) : (
-                      <div className="flex h-full min-h-[5.5rem] items-center justify-center rounded-xl border border-dashed border-slate-200 text-xs text-slate-300 dark:border-slate-800 dark:text-slate-600">
-                        {n > maxSem ? 'graduated' : '—'}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
+// Batch standing label (e.g. "Year 3", "Incoming", "Graduated"), shown in each
+// batch's section header in the expanded view.
+function standingLabel(batch, version) {
+  const maxN = Math.max(...version.semesters.map((s) => s.n))
+  if (batch.currentSem > maxN) return 'Graduated'
+  return batch.standing > 0 ? `Year ${batch.standing}` : 'Incoming'
 }
 
 // ── Expanded view: every semester's full curriculum, vertically ─────────────
@@ -630,8 +564,13 @@ function CurrentView({ batches, versions, maxSem, perspective, open, onOpen }) {
 // structure — the current semester carries a tag and the rail tracks whatever
 // section is in view (scroll-spy), so a long page stays navigable with one
 // click. Read-focused: editing still lives in the timeline/overview views.
-function ExpandedView({ batches, versions, years, perspective, open, onOpen }) {
+function ExpandedView({ batches, versions, years, perspective, onSaveSem }) {
   const [activeId, setActiveId] = useState(null)
+  // Which batch's "View changes" review is open (inline diff + side panel), and
+  // which individual changes the coordinator has already seen (figma-style unread
+  // dots). Both are session state — the review is a lens, not a saved setting.
+  const [changesBatchId, setChangesBatchId] = useState(null)
+  const [seen, setSeen] = useState(() => new Set())
 
   // Flat, ordered list of every semester section on screen (batch order as
   // given — most recent first — semesters ascending within each batch).
@@ -663,6 +602,19 @@ function ExpandedView({ batches, versions, years, perspective, open, onOpen }) {
 
   const jumpTo = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   const canEdit = perspective === 'coordinator'
+
+  // The batch currently under change-review, its version and full change list.
+  const reviewBatch = changesBatchId && batches.find((b) => b.id === changesBatchId)
+  const reviewVersion = reviewBatch && versions[reviewBatch.versionId]
+  const reviewChanges = useMemo(
+    () => (reviewVersion ? batchChanges(reviewVersion, versions) : []),
+    [reviewVersion, versions],
+  )
+  const markSeen = () => setSeen((prev) => new Set([...prev, ...reviewChanges.map((c) => c.id)]))
+  const revertChange = (c) => {
+    const sem = reviewVersion.semesters.find((s) => s.n === c.semN)
+    onSaveSem(reviewVersion.id, c.semN, revertEntries(sem.entries, c))
+  }
 
   return (
     <div className="flex gap-6">
@@ -703,7 +655,7 @@ function ExpandedView({ batches, versions, years, perspective, open, onOpen }) {
                           Now
                         </span>
                       )}
-                      {st === 'done' && <Lock size={10} className="text-slate-300 dark:text-slate-600" />}
+                      {st === 'done' && <Check size={10} className="text-slate-300 dark:text-slate-600" />}
                     </button>
                   )
                 })}
@@ -718,131 +670,123 @@ function ExpandedView({ batches, versions, years, perspective, open, onOpen }) {
       <div className="min-w-0 flex-1 space-y-10">
         {batches.map((b) => {
           const version = versions[b.versionId]
+          const changes = batchChanges(version, versions)
+          const reviewing = changesBatchId === b.id
+          const unread = changes.some((c) => !seen.has(c.id))
           return (
             <section key={b.id} id={`batch-${b.id}`} className="scroll-mt-6">
               <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2 dark:border-slate-800">
                 <h2 className="text-lg font-bold text-slate-900 dark:text-white">Batch {b.admitYear}</h2>
-                <span className="text-xs text-slate-400">
-                  {b.standing > 0 ? `Year ${b.standing}` : 'Incoming'}
-                </span>
+                <span className="text-xs text-slate-400">{standingLabel(b, version)}</span>
                 <VersionTag version={version} />
+                {changes.length > 0 && (
+                  <button
+                    onClick={() => setChangesBatchId(reviewing ? null : b.id)}
+                    className={`ml-auto flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs transition ${
+                      reviewing
+                        ? 'font-medium text-slate-700 dark:text-slate-200'
+                        : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                    }`}
+                  >
+                    <GitCompare size={13} />
+                    <span>{reviewing ? 'Reviewing changes' : 'View changes'}</span>
+                    <span className="tabular-nums text-slate-300 dark:text-slate-500">{changes.length}</span>
+                    {unread && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
+                  </button>
+                )}
               </div>
 
               <div className="mt-4 space-y-5">
-                {version.semesters.map((s) => {
-                  const id = `sem-${b.id}-${s.n}`
-                  const status = semStatus(b, s.n)
-                  const diff = diffSem(version, versions, s.n)
-                  const isOpen = open && open.batchId === b.id && open.n === s.n
-                  return (
-                    <div
-                      key={id}
-                      id={id}
-                      className={`scroll-mt-6 rounded-2xl border bg-white p-5 transition dark:bg-slate-900 ${
-                        isOpen
-                          ? 'border-accent ring-2 ring-accent/40'
-                          : status === 'current'
-                            ? 'border-accent/50 ring-1 ring-accent/20'
-                            : 'border-slate-200 dark:border-slate-800'
-                      }`}
-                    >
-                      <div className="mb-3 flex flex-wrap items-center gap-2">
-                        <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                          Semester {s.n}
-                        </h3>
-                        <StatusPill status={status} />
-                        <span className="text-xs text-slate-400">{yearOfSem(years, s.n)}</span>
-                        {diff && diff.changes > 0 && (
-                          <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-700 dark:bg-blue-950/50 dark:text-blue-300">
-                            {diff.changes} changed
-                          </span>
-                        )}
-                        <span className="ml-auto flex items-center gap-2">
-                          <CreditTag credits={s.totalCredits} label="total" />
-                          {canEdit && (
-                            <button
-                              onClick={() => onOpen(b.id, s.n)}
-                              title="Edit this semester"
-                              className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:text-slate-300"
-                            >
-                              <Pencil size={13} /> Edit
-                            </button>
-                          )}
-                        </span>
-                      </div>
-                      <SemReadView sem={s} batch={b} perspective={perspective} status={status} diff={diff} flat />
-                    </div>
-                  )
-                })}
+                {version.semesters.map((s) => (
+                  <ExpandedSemCard
+                    key={`sem-${b.id}-${s.n}`}
+                    batch={b}
+                    version={version}
+                    versions={versions}
+                    years={years}
+                    semester={s}
+                    perspective={perspective}
+                    reviewing={reviewing}
+                    canEdit={canEdit}
+                    onSaveSem={onSaveSem}
+                  />
+                ))}
               </div>
             </section>
           )
         })}
       </div>
+
+      {reviewBatch && reviewVersion && (
+        <ChangesPanel
+          key={reviewBatch.id}
+          batch={reviewBatch}
+          changes={reviewChanges}
+          seen={seen}
+          onSeen={markSeen}
+          onRevert={revertChange}
+          onJump={(c) => jumpTo(`sem-${reviewBatch.id}-${c.semN}`)}
+          onClose={() => setChangesBatchId(null)}
+        />
+      )}
     </div>
   )
 }
 
-function StudentLine({ batch, n, status }) {
-  if (status === 'done')
-    return (
-      <span className="flex items-center gap-1 text-[11px] font-medium text-green-600 dark:text-green-400">
-        <CheckCircle2 size={11} /> SPI {mockCPI(batch.id, n)}
-      </span>
-    )
-  if (status === 'current')
-    return (
-      <span className="flex items-center gap-1 text-[11px] font-medium text-accent">
-        <Clock size={11} /> in progress
-      </span>
-    )
-  return <span className="text-[11px] font-medium text-slate-400">upcoming</span>
-}
-
-// ── In-flow detail panel (adjusts the matrix, not an overlay) ────────────────
-function DetailPanel({ batch, version, versions, years, semester, perspective, batchesOnVersion, onClose, onSave }) {
+// One semester in the expanded view. Read-only by default; "Edit" flips the card
+// in place into the inline editor (no side panel). When the batch is under
+// change-review, the read view becomes a field-level diff against the base batch.
+function ExpandedSemCard({ batch, version, versions, years, semester: s, perspective, reviewing, canEdit, onSaveSem }) {
+  const status = semStatus(batch, s.n)
+  const id = `sem-${batch.id}-${s.n}`
+  const diff = reviewing ? diffSem(version, versions, s.n) : null
+  const base = reviewing ? baseOf(version, versions)?.semesters.find((x) => x.n === s.n) : null
+  // Finished semesters are locked — their curriculum is history and can't be edited.
+  const editable = canEdit && status !== 'done'
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(() => deepClone(semester.entries))
-  const status = semStatus(batch, semester.n)
-  const canEdit = perspective === 'coordinator'
-  const diff = diffSem(version, versions, semester.n)
-
-  useEffect(() => {
-    const onKey = (e) => e.key === 'Escape' && (editing ? setEditing(false) : onClose())
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [editing, onClose])
+  const [draft, setDraft] = useState(() => deepClone(s.entries))
 
   const startEdit = () => {
-    setDraft(deepClone(semester.entries))
+    setDraft(deepClone(s.entries))
     setEditing(true)
   }
   const save = () => {
-    onSave(draft)
+    onSaveSem(version.id, s.n, draft)
     setEditing(false)
   }
+  const semChanges = diff?.changes || 0
 
   return (
-    <aside className="sticky top-4 flex max-h-[calc(100vh-7rem)] w-[420px] shrink-0 flex-col self-start overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-      <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-bold">Semester {semester.n}</h2>
-            <StatusPill status={status} />
-          </div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-            <span>
-              {yearOfSem(years, semester.n)} · Batch {batch.admitYear} · {version.label}
+    <div
+      id={id}
+      className={`scroll-mt-6 rounded-2xl border bg-white p-5 transition dark:bg-slate-900 ${
+        editing
+          ? 'border-accent ring-2 ring-accent/40'
+          : status === 'current'
+            ? 'border-accent/50 ring-1 ring-accent/20'
+            : 'border-slate-200 dark:border-slate-800'
+      }`}
+    >
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h3 className="text-base font-bold text-slate-900 dark:text-white">Semester {s.n}</h3>
+        <StatusPill status={status} />
+        <span className="text-xs text-slate-400">{yearOfSem(years, s.n)}</span>
+        {!editing && reviewing && semChanges > 0 && (
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+            {semChanges} changed
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-2">
+          <CreditTag credits={editing ? draftCredits(draft) : s.totalCredits} label="total" />
+          {canEdit && status === 'done' && !editing && (
+            <span
+              title="Finished semesters are locked"
+              className="flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-slate-500"
+            >
+              <Lock size={12} /> Locked
             </span>
-            {!version.approved && (
-              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
-                Ongoing
-              </span>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          {canEdit && !editing && (
+          )}
+          {editable && !editing && (
             <button
               onClick={startEdit}
               title="Edit this semester"
@@ -851,47 +795,16 @@ function DetailPanel({ batch, version, versions, years, semester, perspective, b
               <Pencil size={13} /> Edit
             </button>
           )}
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
-          >
-            <X size={18} />
-          </button>
-        </div>
-      </header>
-
-      {editing && (
-        <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
-          <Pencil size={13} className="shrink-0" />
-          Editing {version.label} — affects {batchesOnVersion} batch
-          {batchesOnVersion > 1 ? 'es' : ''} on this version.
-        </div>
-      )}
-
-      {!editing && diff && diff.changes > 0 && (
-        <div className="flex flex-wrap items-center gap-2 border-b border-blue-200 bg-blue-50 px-5 py-2 text-xs text-blue-800 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-300">
-          <span className="font-semibold">{diff.changes} change{diff.changes > 1 ? 's' : ''}</span>
-          <span className="text-blue-500 dark:text-blue-400">vs {diff.baseLabel}</span>
-          <span className="ml-auto flex items-center gap-2">
-            {diff.added > 0 && <DiffTag status="added" count={diff.added} />}
-            {diff.modified > 0 && <DiffTag status="modified" count={diff.modified} />}
-            {diff.removed.length > 0 && <DiffTag status="removed" count={diff.removed.length} />}
-          </span>
-        </div>
-      )}
-
-      <div className="thin-scroll flex-1 overflow-y-auto p-5">
-        {editing ? (
-          <SemEditView draft={draft} setDraft={setDraft} />
-        ) : (
-          <SemReadView sem={semester} batch={batch} perspective={perspective} status={status} diff={diff} />
-        )}
+        </span>
       </div>
 
-      <footer className="flex items-center justify-between border-t border-slate-200 px-5 py-3 dark:border-slate-800">
-        <CreditTag credits={editing ? draftCredits(draft) : semester.totalCredits} label="total" />
-        {editing ? (
-          <div className="flex gap-2">
+      {editing ? (
+        <>
+          <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+            <Pencil size={13} className="shrink-0" /> Editing {version.label} — changes apply to every batch on this version.
+          </div>
+          <SemEditView draft={draft} setDraft={setDraft} />
+          <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
             <button
               onClick={() => setEditing(false)}
               className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800"
@@ -905,13 +818,225 @@ function DetailPanel({ batch, version, versions, years, semester, perspective, b
               <Check size={15} /> Save changes
             </button>
           </div>
+        </>
+      ) : diff && base ? (
+        <SemDiffView sem={s} base={base} diff={diff} />
+      ) : (
+        <SemReadView sem={s} batch={batch} perspective={perspective} status={status} flat />
+      )}
+    </div>
+  )
+}
+
+// ── Field-level inline diff for one semester (the "View changes" read mode) ──
+// Walks the base batch's entries in order so removed courses stay in place
+// (struck through), survivors show old → new values inline, and added courses
+// trail at the end. Mirrors the panel, but in the curriculum itself.
+function SemDiffView({ sem, base, diff }) {
+  const statusMap = diff?.status || {}
+  const notMand = (e) => e.kind !== 'mandatory'
+  const baseMap = new Map(base.entries.map((e) => [entryKey(e), e]))
+  const curMap = new Map(sem.entries.map((e) => [entryKey(e), e]))
+
+  const rows = []
+  for (const be of base.entries.filter(notMand)) {
+    const k = entryKey(be)
+    const cur = curMap.get(k)
+    if (cur) rows.push({ entry: cur, base: be, status: statusMap[k] || 'same' })
+    else rows.push({ entry: be, base: be, status: 'removed' })
+  }
+  for (const ce of sem.entries.filter(notMand)) {
+    if (!baseMap.has(entryKey(ce))) rows.push({ entry: ce, status: 'added' })
+  }
+  const mandatory = sem.entries.filter((e) => e.kind === 'mandatory')
+
+  return (
+    <div className="space-y-1.5">
+      {rows.map((r, i) =>
+        r.entry.kind === 'basket' ? <DiffBasketRow key={i} row={r} /> : <DiffCourseRow key={i} row={r} />,
+      )}
+      {mandatory.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pt-1">
+          {mandatory.map((e, i) => (
+            <span
+              key={`${e.code}-${i}`}
+              className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+            >
+              <Lock size={10} /> {e.code} · {e.name} (non-credit)
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DiffCourseRow({ row }) {
+  const { entry: e, base: b, status } = row
+  const isCore = e.kind === 'core'
+  const metric = (x) => (isCore ? `${x.l ?? 0}-${x.t ?? 0}-${x.st ?? 0} · ${x.credits} cr` : `${x.credits} cr`)
+  const removed = status === 'removed'
+  const added = status === 'added'
+  const modified = status === 'modified'
+  const metricChanged = modified && b && metric(b) !== metric(e)
+
+  const tone = added
+    ? 'border-l-2 border-green-500 bg-green-50/50 dark:bg-green-950/20'
+    : removed
+      ? 'border-l-2 border-red-300 bg-red-50/50 dark:border-red-900/60 dark:bg-red-950/20'
+      : modified
+        ? 'border-l-2 border-amber-400 bg-amber-50/50 dark:bg-amber-950/20'
+        : 'border-l-2 border-transparent'
+
+  let marker = null
+  if (added) marker = { label: 'New', cls: 'text-green-600 dark:text-green-400' }
+  else if (removed) marker = { label: 'Removed', cls: 'text-red-400 dark:text-red-400/70' }
+  else if (metricChanged && e.credits !== b.credits)
+    marker = { label: e.credits > b.credits ? 'Credits ↑' : 'Credits ↓', cls: 'text-amber-600 dark:text-amber-400' }
+  else if (modified) marker = { label: 'Changed', cls: 'text-amber-600 dark:text-amber-400' }
+
+  return (
+    <div className={`flex items-center gap-3 rounded-md px-3 py-2 ${tone}`}>
+      <span className={`w-16 shrink-0 text-xs font-bold ${removed ? 'text-red-300 line-through dark:text-red-400/60' : 'text-slate-400'}`}>
+        {e.code}
+      </span>
+      <span
+        className={`min-w-0 flex-1 truncate text-sm ${
+          removed ? 'text-red-400 line-through dark:text-red-400/70' : 'text-slate-700 dark:text-slate-200'
+        } ${added ? 'font-semibold' : ''}`}
+      >
+        {e.name || e.title}
+      </span>
+      <span className="flex shrink-0 items-center gap-2 text-[11px]">
+        {metricChanged && <span className="text-red-400 line-through dark:text-red-400/60">{metric(b)}</span>}
+        {removed ? (
+          <span className="text-red-400 line-through dark:text-red-400/60">{metric(b)}</span>
         ) : (
-          <span className="text-xs text-slate-400">
-            {semester.entries.filter((e) => e.kind !== 'mandatory').length} courses
+          <span className={metricChanged ? 'font-semibold text-green-600 dark:text-green-400' : 'text-slate-400'}>
+            {metric(e)}
           </span>
         )}
-      </footer>
+      </span>
+      {marker && <span className={`w-14 shrink-0 text-right text-[10px] font-bold ${marker.cls}`}>{marker.label}</span>}
+    </div>
+  )
+}
+
+function DiffBasketRow({ row }) {
+  const { entry: e, status } = row
+  if (status === 'removed')
+    return (
+      <div className="rounded-xl border border-dashed border-red-200 bg-red-50/40 px-3 py-2.5 dark:border-red-900/50 dark:bg-red-950/20">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-red-400 line-through dark:text-red-400/70">{e.title}</span>
+          <span className="text-[10px] font-bold text-red-400 dark:text-red-400/70">Removed</span>
+        </div>
+      </div>
+    )
+  return <BasketBlock e={e} st={status === 'same' ? undefined : status} />
+}
+
+// ── "View changes" side panel — minimal, colourless, figma-comment style ─────
+// Every change on one line, newest semester first, each with a revert affordance
+// on hover. An unread change carries a small accent dot until the panel is seen.
+function ChangesPanel({ batch, changes, seen, onSeen, onRevert, onJump, onClose }) {
+  useEffect(() => {
+    const t = setTimeout(onSeen, 1000)
+    return () => clearTimeout(t)
+  }, [onSeen])
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose()
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <aside className="sticky top-4 hidden h-fit max-h-[calc(100vh-7rem)] w-72 shrink-0 flex-col self-start overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 xl:flex">
+      <header className="flex items-start justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+        <div>
+          <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Changes</div>
+          <div className="text-[11px] text-slate-400">
+            Batch {batch.admitYear} · {changes.length} change{changes.length === 1 ? '' : 's'}
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+        >
+          <X size={16} />
+        </button>
+      </header>
+      <div className="thin-scroll flex-1 overflow-y-auto">
+        {changes.length === 0 ? (
+          <div className="px-4 py-8 text-center text-xs text-slate-400">No changes yet.</div>
+        ) : (
+          changes.map((c) => (
+            <ChangeRow
+              key={c.id}
+              c={c}
+              unread={!seen.has(c.id)}
+              onRevert={() => onRevert(c)}
+              onJump={() => onJump?.(c)}
+            />
+          ))
+        )}
+      </div>
     </aside>
+  )
+}
+
+// Colour + label per change type — a removed course is struck through so the
+// row reads as "this is gone", an added one is green, an edit amber with its
+// specific delta (e.g. "3 → 4 cr"). Clicking the row scrolls the curriculum to
+// the semester where the change lives.
+const CHANGE_TONE = {
+  added: 'text-green-600 dark:text-green-400',
+  removed: 'text-red-500 dark:text-red-400',
+  modified: 'text-amber-600 dark:text-amber-400',
+}
+function ChangeRow({ c, unread, onRevert, onJump }) {
+  const removed = c.type === 'removed'
+  const tone = CHANGE_TONE[c.type] || CHANGE_TONE.modified
+  return (
+    <div className="group flex items-start gap-2.5 border-b border-slate-100 px-4 py-2.5 last:border-0 dark:border-slate-800/70">
+      <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${unread ? 'bg-accent' : 'bg-transparent'}`} />
+      <button
+        onClick={onJump}
+        title="Jump to this semester"
+        className="min-w-0 flex-1 text-left"
+      >
+        <div className="flex items-baseline gap-1.5">
+          {c.code && (
+            <span
+              className={`shrink-0 text-[11px] font-semibold ${
+                removed ? 'text-red-400 line-through dark:text-red-400/70' : 'text-slate-400'
+              }`}
+            >
+              {c.code}
+            </span>
+          )}
+          <span
+            className={`truncate text-[13px] ${
+              removed
+                ? 'text-red-400 line-through dark:text-red-400/70'
+                : 'text-slate-700 dark:text-slate-200'
+            }`}
+          >
+            {c.name || c.code}
+          </span>
+        </div>
+        <div className="mt-0.5 text-[11px] text-slate-400">
+          Sem {c.semN} · <span className={`font-medium ${tone}`}>{changeSummary(c)}</span>
+        </div>
+      </button>
+      <button
+        onClick={onRevert}
+        title="Revert this change"
+        className="shrink-0 rounded-md p-1 text-slate-300 opacity-0 transition hover:bg-slate-100 hover:text-slate-600 focus:opacity-100 group-hover:opacity-100 dark:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+      >
+        <RotateCcw size={13} />
+      </button>
+    </div>
   )
 }
 
@@ -1090,27 +1215,20 @@ function StudentSemView({ sem, batch, status, flat = false }) {
   )
 }
 
-// Letter-grade badge, tinted by grade tier (top grades green, mid accent/amber).
-// `flat` renders it as light, unboxed text — for the scannable expanded view.
+// Letter-grade badge — quiet and neutral (no tier colour), so the transcript
+// reads calmly rather than as a graded report card. `flat` renders it as light,
+// unboxed text — for the scannable expanded view.
 function GradeTag({ grade, flat = false }) {
-  const pts = GRADE_POINTS[grade] ?? 0
-  if (flat) {
-    const text =
-      pts >= 9
-        ? 'text-green-600 dark:text-green-400'
-        : pts >= 7
-          ? 'text-slate-600 dark:text-slate-300'
-          : 'text-amber-600 dark:text-amber-400'
-    return <span className={`w-8 shrink-0 text-right text-sm font-bold tabular-nums ${text}`}>{grade}</span>
-  }
-  const cls =
-    pts >= 9
-      ? 'bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300'
-      : pts >= 7
-        ? 'bg-accent-soft text-accent dark:bg-slate-700 dark:text-slate-200'
-        : 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
+  if (flat)
+    return (
+      <span className="w-8 shrink-0 text-right text-sm font-medium tabular-nums text-slate-500 dark:text-slate-400">
+        {grade}
+      </span>
+    )
   return (
-    <span className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-bold tabular-nums ${cls}`}>{grade}</span>
+    <span className="shrink-0 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+      {grade}
+    </span>
   )
 }
 
@@ -1348,82 +1466,70 @@ function CreateBatchModal({ fromBatch, fromVersion, nextYear, onCancel, onConfir
 }
 
 // ── Small shared bits ────────────────────────────────────────────────────────
-// The view picker: a clean labelled dropdown (Overview / Current timeline).
-function ViewSelect({ value, onChange }) {
+// Dual-listbox picker. The programme list is single-select (one ticked row); the
+// batch list is multi-select with an "All batches" master row. Same checkbox
+// affordance throughout, scrollable and capped in height so it stays compact.
+function Listbox({ label, items, selected, onSelect, multi = false, onToggleAll }) {
+  const isSel = (id) => selected.includes(id)
+  const allSel = items.length > 0 && items.every((it) => isSel(it.id))
+  const someSel = items.some((it) => isSel(it.id))
   return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-3.5 pr-9 text-sm font-semibold text-slate-700 outline-none transition hover:border-slate-300 focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+    <div className="flex w-56 flex-col">
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+      <div
+        role="listbox"
+        aria-label={label}
+        aria-multiselectable={multi}
+        className="thin-scroll h-44 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/60 p-1 dark:border-slate-700 dark:bg-slate-900/50"
       >
-        <option value="overview">Overview</option>
-        <option value="current">Current timeline</option>
-      </select>
-      <ChevronDown
-        size={15}
-        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
-      />
-    </div>
-  )
-}
-
-// Top-level programme filter (B.Des. / M.Des. / Ph.D.). Switching swaps the
-// whole knowledge layer — the filter chips and content follow.
-function ProgrammeSelect({ value, onChange, curriculum }) {
-  return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label="Programme"
-        className="cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-3.5 pr-9 text-sm font-semibold text-slate-700 outline-none transition hover:border-slate-300 focus:border-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-      >
-        {PROGRAMME_IDS.map((id) => (
-          <option key={id} value={id}>
-            {curriculum[id].program.label}
-          </option>
+        {multi && onToggleAll && (
+          <>
+            <ListboxRow label="All batches" checked={allSel} partial={someSel && !allSel} onClick={onToggleAll} />
+            <div className="my-1 border-t border-slate-200 dark:border-slate-800" />
+          </>
+        )}
+        {items.map((it) => (
+          <ListboxRow
+            key={it.id}
+            label={it.label}
+            hint={it.hint}
+            checked={isSel(it.id)}
+            onClick={() => onSelect(it.id)}
+          />
         ))}
-      </select>
-      <ChevronDown
-        size={15}
-        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
-      />
+      </div>
     </div>
   )
 }
 
-// Compact ⇄ Expanded density toggle. Icon-only, except the active mode also
-// shows its label — same shell as the Coordinator/Student segmented control.
-function ModeToggle({ value, onChange }) {
-  const opts = [
-    { id: 'compact', label: 'Compact', icon: LayoutGrid },
-    { id: 'expanded', label: 'Expanded', icon: LayoutList },
-  ]
+function ListboxRow({ label, hint, checked, partial = false, onClick }) {
   return (
-    <div className="flex rounded-lg bg-slate-100 p-0.5 dark:bg-slate-800">
-      {opts.map((o) => {
-        const Icon = o.icon
-        const active = value === o.id
-        return (
-          <button
-            key={o.id}
-            onClick={() => onChange(o.id)}
-            title={o.label}
-            aria-label={o.label}
-            aria-pressed={active}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition ${
-              active
-                ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white'
-                : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
-            }`}
-          >
-            <Icon size={15} />
-            {active && <span>{o.label}</span>}
-          </button>
-        )
-      })}
-    </div>
+    <button
+      role="option"
+      aria-selected={checked}
+      onClick={onClick}
+      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition ${
+        checked
+          ? 'bg-white font-semibold text-slate-900 shadow-sm dark:bg-slate-800 dark:text-white'
+          : 'text-slate-600 hover:bg-white/70 dark:text-slate-300 dark:hover:bg-slate-800/50'
+      }`}
+    >
+      <span
+        className={`flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border transition ${
+          checked || partial
+            ? 'border-accent bg-accent text-white'
+            : 'border-slate-300 bg-white dark:border-slate-600 dark:bg-slate-900'
+        }`}
+      >
+        {partial ? <Minus size={12} strokeWidth={3} /> : checked ? <Check size={12} strokeWidth={3} /> : null}
+      </span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {hint && (
+        <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
+          {hint}
+        </span>
+      )}
+    </button>
   )
 }
 
@@ -1447,21 +1553,6 @@ function Segmented({ value, onChange, options }) {
         )
       })}
     </div>
-  )
-}
-
-function Chip({ label, active, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-full border px-3.5 py-1.5 text-sm font-medium transition ${
-        active
-          ? 'border-accent bg-accent text-white'
-          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'
-      }`}
-    >
-      {label}
-    </button>
   )
 }
 
@@ -1497,7 +1588,7 @@ function Input({ value, onChange, placeholder, type = 'text', className = '' }) 
   return (
     <input
       type={type}
-      value={value}
+      value={value ?? ''}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       className={`rounded-md border border-slate-200 bg-white px-2 py-1 text-xs outline-none focus:border-accent dark:border-slate-700 dark:bg-slate-950 ${className}`}

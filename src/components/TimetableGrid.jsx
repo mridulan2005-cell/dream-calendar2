@@ -96,6 +96,12 @@ export default function TimetableGrid({
   disputedIds,
   onMoveCourses,
   previewCourse,
+  trayDragCourseId,
+  onTrayDrop,
+  // Published, view-only timetables render every course block uniformly — the
+  // red clash highlight belongs only to the live draft being built. When set,
+  // conflict styling is suppressed so the grid reads as one calm, settled plan.
+  hideConflicts = false,
 }) {
   const { courses: committed, conflicts: committedConflicts } = useApp()
   const disputed = disputedIds || new Set()
@@ -121,6 +127,13 @@ export default function TimetableGrid({
   const [overKey, setOverKey] = useState(null) // `${col}@${slot}` being dragged over
   const dndEnabled = !active && !!onMoveCourses
   const order = rows.map((r) => r.id)
+
+  // A course dragged in from the bottom tray (DraftTimetable). It may only land
+  // in a column it belongs to — its cohort (or, in faculty view, a teacher).
+  const trayCourse =
+    trayDragCourseId && !active ? courses.find((c) => c.id === trayDragCourseId) : null
+  const matchCol = (c, col) =>
+    view === 'faculty' ? c.faculty.includes(col) : view === 'venue' ? c.venue === col : c.cohort === col
 
   // Shift every week of a course by `delta` rows; null if it would leave the grid.
   const shiftCourse = (course, delta) => {
@@ -266,19 +279,19 @@ export default function TimetableGrid({
               <tr>
                 <th
                   rowSpan={2}
-                  className="sticky left-0 top-0 z-30 w-12 border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
+                  className="sticky left-0 top-0 z-30 w-12 min-w-[3rem] border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
                 >
                   Week
                 </th>
                 <th
                   rowSpan={2}
-                  className="sticky left-[3rem] top-0 z-30 w-14 border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
+                  className="sticky left-[3rem] top-0 z-30 w-14 min-w-[3.5rem] border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
                 >
                   Start
                 </th>
                 <th
                   rowSpan={2}
-                  className="sticky left-[6.5rem] top-0 z-30 w-14 border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
+                  className="sticky left-[6.5rem] top-0 z-30 w-14 min-w-[3.5rem] border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
                 >
                   End
                 </th>
@@ -324,13 +337,13 @@ export default function TimetableGrid({
             </>
           ) : (
             <tr>
-              <th className="sticky left-0 top-0 z-30 h-12 w-12 border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <th className="sticky left-0 top-0 z-30 h-12 w-12 min-w-[3rem] border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 Week
               </th>
-              <th className="sticky left-[3rem] top-0 z-30 h-12 w-14 border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <th className="sticky left-[3rem] top-0 z-30 h-12 w-14 min-w-[3.5rem] border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 Start
               </th>
-              <th className="sticky left-[6.5rem] top-0 z-30 h-12 w-14 border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <th className="sticky left-[6.5rem] top-0 z-30 h-12 w-14 min-w-[3.5rem] border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 End
               </th>
               {columns.map((col) => (
@@ -358,13 +371,13 @@ export default function TimetableGrid({
         <tbody>
           {rows.map((slot, ri) => (
             <tr key={slot.id}>
-              <td className="sticky left-0 z-10 h-16 w-12 border border-slate-200 bg-white px-2 py-3 align-top font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <td className="sticky left-0 z-10 h-16 w-12 min-w-[3rem] border border-slate-200 bg-white px-2 py-3 align-top font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 {slot.label}
               </td>
-              <td className="sticky left-[3rem] z-10 h-16 w-14 whitespace-nowrap border border-slate-200 bg-white px-2 py-3 align-top text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <td className="sticky left-[3rem] z-10 h-16 w-14 min-w-[3.5rem] whitespace-nowrap border border-slate-200 bg-white px-2 py-3 align-top text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 {ddmm(slot.dateRange.start)}
               </td>
-              <td className="sticky left-[6.5rem] z-10 h-16 w-14 whitespace-nowrap border border-slate-200 bg-white px-2 py-3 align-top text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <td className="sticky left-[6.5rem] z-10 h-16 w-14 min-w-[3.5rem] whitespace-nowrap border border-slate-200 bg-white px-2 py-3 align-top text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 {ddmm(slot.dateRange.end)}
               </td>
               {columns.map((col, ci) => {
@@ -387,6 +400,20 @@ export default function TimetableGrid({
                       onDrop: () => handleDrop(slot.id, col),
                     }
                   : null
+                // Tray drop: an unmapped course can land on an empty cell of a
+                // column it belongs to.
+                const tray =
+                  trayCourse && onTrayDrop && matchCol(trayCourse, col) && list.length === 0
+                    ? {
+                        isOver: overKey === overKeyThis,
+                        onOver: () => setOverKey(overKeyThis),
+                        onLeave: () => setOverKey((kk) => (kk === overKeyThis ? null : kk)),
+                        onDrop: () => {
+                          setOverKey(null)
+                          onTrayDrop(trayCourse.id, slot.id)
+                        },
+                      }
+                    : null
                 const dimmed = dragInfo && dragInfo.column !== col
                 const highlightCol = dragInfo && dragInfo.column === col
 
@@ -401,6 +428,7 @@ export default function TimetableGrid({
                     slotId={slot.id}
                     active={active}
                     dnd={dnd}
+                    tray={tray}
                     dimmed={dimmed}
                     highlightCol={highlightCol}
                   >
@@ -433,9 +461,9 @@ export default function TimetableGrid({
                       {!active && list.length > 1 ? (
                         (() => {
                           const anyDisputed = list.some((c) => disputed.has(c.id))
-                          const anyClash = list.some((c) =>
-                            conflicts.conflictCells.has(`${c.id}@${slot.id}`),
-                          )
+                          const anyClash =
+                            !hideConflicts &&
+                            list.some((c) => conflicts.conflictCells.has(`${c.id}@${slot.id}`))
                           const groupHl = list.some((c) => c.id === highlightCourseId)
                           return (
                             <button
@@ -482,7 +510,8 @@ export default function TimetableGrid({
                       ) : (
                       <div className={`flex-1 ${active && list.length > 1 ? 'flex w-max gap-1' : 'space-y-1'}`}>
                         {list.map((course) => {
-                          const clash = conflicts.conflictCells.has(`${course.id}@${slot.id}`)
+                          const clash =
+                            !hideConflicts && conflicts.conflictCells.has(`${course.id}@${slot.id}`)
                           const highlighted = course.id === highlightCourseId
                           const isOrigin =
                             active && course.id === placement.course.id && slot.id === placement.fromSlot
@@ -586,6 +615,7 @@ function PlacementCell({
   slotId,
   active,
   dnd,
+  tray,
   dimmed,
   highlightCol,
   children,
@@ -603,7 +633,8 @@ function PlacementCell({
   const colHighlight = highlightCol ? 'bg-accent-soft/70 dark:bg-accent/15' : ''
   const candidateRing = isCandidate ? 'outline outline-2 outline-accent' : ''
   const interactive = isDestCol && cat !== 'grey'
-  const dndOver = dnd?.isOver && dnd.valid ? 'outline outline-2 outline-accent' : ''
+  const dndOver =
+    (dnd?.isOver && dnd.valid) || tray?.isOver ? 'outline outline-2 outline-accent' : ''
 
   const handlers = interactive
     ? {
@@ -618,7 +649,20 @@ function PlacementCell({
           placement.onPick(slotId)
         },
       }
-    : dnd?.enabled
+    : tray
+      ? {
+          onDragOver: (e) => {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'copy'
+            tray.onOver()
+          },
+          onDragLeave: () => tray.onLeave(),
+          onDrop: (e) => {
+            e.preventDefault()
+            tray.onDrop()
+          },
+        }
+      : dnd?.enabled
       ? {
           onDragOver: (e) => {
             e.preventDefault()
@@ -641,7 +685,7 @@ function PlacementCell({
     <td
       rowSpan={rowSpan}
       colSpan={colSpan}
-      className={`${base} ${placementBg} ${colHighlight} ${candidateRing} ${dndOver} ${dimmed ? 'opacity-40' : ''} ${interactive ? 'cursor-pointer' : ''}`}
+      className={`${base} ${placementBg} ${colHighlight} ${candidateRing} ${dndOver} ${dimmed ? 'opacity-40' : ''} ${interactive ? 'cursor-pointer' : ''} ${tray ? 'cursor-copy' : ''}`}
       {...handlers}
     >
       {/* Rank badge + rank-1 reason */}

@@ -91,6 +91,7 @@ export const faculty = [
   'Abhishek',
   'Aditi Chitre',
   'Aman',
+  'Amitesh',
   'Anirudha',
   'Anisha',
   'Bharat',
@@ -102,10 +103,13 @@ export const faculty = [
   'GVS',
   'Jayati',
   'Jayesh',
+  'Jinal',
   'Junjha',
   'Kanika',
   'Kartikeya',
   'Kumaresan',
+  'Lalitha',
+  'Latha',
   'Mandar',
   'Milouni',
   'Nishant Kamboj',
@@ -123,6 +127,8 @@ export const faculty = [
   'Satheesh',
   'Satish',
   'Shilpa',
+  'Shyam',
+  'Somnath',
   'Sridhar',
   'Sridhar Mahadevan',
   'Sudesh',
@@ -438,6 +444,122 @@ const seriesSlots = (prefix, n, withX) => {
   if (withX) list.push({ id: `${prefix}X`, runs: WEEKS_NOTE })
   return list
 }
+
+// ── Weekly Elective Courses (DE prefix) ────────────────────────────────────
+// Batch-specific courses that run at fixed IITB institute slots every week
+// (not full-week modules). prevWeeklySlots lists the slot IDs from the
+// institute slot system where each course ran last year — used to highlight
+// "optimal" drop targets in the weekly grid.
+//
+// Slot ID reference (from slotSystem.js SLOT_S / SLOT_L):
+//   4A/4B  = Tue/Thu 08:00–09:25   (morning band)
+//   6A/6B  = Wed/Fri 09:30–10:55   (Insti Slot 5, extended)
+//   7A/7B  = Wed/Fri 11:05–12:30   (Insti Slot 6, extended)
+//   LX     = Wed 14:00–16:55       (Insti Slot X, L-block)
+//   XC     = Wed 17:05–18:00       (evening overflow)
+export const weeklyElectives = [
+  // ── MDes 1st Year ────────────────────────────────────────────────
+  { id: 'WE-663-ID',  code: 'DE 663', title: 'Sketching',
+    type: 'WeeklyElective', cohort: 'MDes 1: ID',
+    faculty: ['Dhruv'], credits: 2,
+    prevWeeklySlots: ['4A', '4B'], schedule: 'Tue & Thu 08:00–09:25' },
+  { id: 'WE-688-CD',  code: 'DE 688', title: 'Sketching',
+    type: 'WeeklyElective', cohort: 'MDes 1: CD',
+    faculty: ['Jinal'], credits: 2,
+    prevWeeklySlots: ['4A', '4B'], schedule: 'Tue & Thu 08:00–09:25' },
+  { id: 'WE-651-AN',  code: 'DE 651', title: 'Sketching',
+    type: 'WeeklyElective', cohort: 'MDes 1: AN',
+    faculty: ['Shyam', 'Somnath'], credits: 2,
+    prevWeeklySlots: ['4A', '4B'], schedule: 'Tue & Thu 08:00–09:25' },
+  { id: 'WE-627-ID',  code: 'DE 627', title: 'Indian Thoughts and Traditions',
+    type: 'WeeklyElective', cohort: 'MDes 1: ID',
+    faculty: ['Sumant'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-627-CD',  code: 'DE 627', title: 'Indian Thoughts and Traditions',
+    type: 'WeeklyElective', cohort: 'MDes 1: CD',
+    faculty: ['Sumant'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-627-IxD', code: 'DE 627', title: 'Indian Thoughts and Traditions',
+    type: 'WeeklyElective', cohort: 'MDes 1: IxD',
+    faculty: ['Sumant'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-627-AN',  code: 'DE 627', title: 'Indian Thoughts and Traditions',
+    type: 'WeeklyElective', cohort: 'MDes 1: AN',
+    faculty: ['Sumant'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-665-MVD', code: 'DE 665', title: 'Model Making',
+    type: 'WeeklyElective', cohort: 'MDes 1: MVD',
+    faculty: ['Unni'], credits: 2,
+    prevWeeklySlots: [], schedule: 'Thu 05:30–08:30 (early lab)' },
+  { id: 'WE-630-IxD', code: 'DE 630', title: 'Trends',
+    type: 'WeeklyElective', cohort: 'MDes 1: IxD',
+    faculty: ['Jayesh'], credits: 2,
+    prevWeeklySlots: ['7A', '7B'], schedule: 'Wed & Fri 11:05–12:30 [Slot 6]' },
+  { id: 'WE-645-AN',  code: 'DE 645', title: 'Animation Theory',
+    type: 'WeeklyElective', cohort: 'MDes 1: AN',
+    faculty: ['Abhishek', 'Somnath', 'Shilpa'], credits: 2,
+    prevWeeklySlots: ['7A', '7B'], schedule: 'Wed & Fri 11:05–12:30 [Slot 6]' },
+
+  // ── MDes 2nd Year ────────────────────────────────────────────────
+  { id: 'WE-702-ID',  code: 'DE 702', title: 'Arts Design and Society-1',
+    type: 'WeeklyElective', cohort: 'MDes 2: ID',
+    faculty: ['Aditi Chitre', 'Aman'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-702-CD',  code: 'DE 702', title: 'Arts Design and Society-1',
+    type: 'WeeklyElective', cohort: 'MDes 2: CD',
+    faculty: ['Aditi Chitre', 'Aman'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-702-IxD', code: 'DE 702', title: 'Arts Design and Society-1',
+    type: 'WeeklyElective', cohort: 'MDes 2: IxD',
+    faculty: ['Aditi Chitre', 'Aman'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-702-AN',  code: 'DE 702', title: 'Arts Design and Society-1',
+    type: 'WeeklyElective', cohort: 'MDes 2: AN',
+    faculty: ['Aditi Chitre', 'Aman'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-702-MVD', code: 'DE 702', title: 'Arts Design and Society-1',
+    type: 'WeeklyElective', cohort: 'MDes 2: MVD',
+    faculty: ['Aditi Chitre', 'Aman'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-714-IxD', code: 'DE 714', title: 'Design Fiction',
+    type: 'WeeklyElective', cohort: 'MDes 2: IxD',
+    faculty: ['Venkatesh'], credits: 2,
+    prevWeeklySlots: ['7A', '7B'], schedule: 'Wed & Fri 11:05–12:30 [Slot 6]' },
+  { id: 'WE-713-MVD', code: 'DE 713', title: 'Seminar and Critical Writing',
+    type: 'WeeklyElective', cohort: 'MDes 2: MVD',
+    faculty: ['Jinal'], credits: 2,
+    prevWeeklySlots: ['LX'], schedule: 'Wed 14:00–16:55 [Slot X]' },
+
+  // ── BDes Courses ─────────────────────────────────────────────────
+  { id: 'WE-117-BD1', code: 'DE 117', title: 'Introduction to Writing',
+    type: 'WeeklyElective', cohort: 'BDes 1',
+    faculty: ['Lalitha'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-224-BD2', code: 'DE 224', title: 'Natural Dyeing',
+    type: 'WeeklyElective', cohort: 'BDes 2',
+    faculty: ['Latha', 'Phani'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-209-BD2', code: 'DE 209', title: 'Sculptural Ceramics',
+    type: 'WeeklyElective', cohort: 'BDes 2',
+    faculty: ['Raja', 'Phani'], credits: 2,
+    prevWeeklySlots: ['6A', '6B'], schedule: 'Wed & Fri 09:30–10:55 [Slot 5]' },
+  { id: 'WE-215-BD2', code: 'DE 215', title: 'Reading',
+    type: 'WeeklyElective', cohort: 'BDes 2',
+    faculty: ['Lalitha'], credits: 2,
+    prevWeeklySlots: ['7A', '7B'], schedule: 'Wed & Fri 11:05–12:30 [Slot 6]' },
+  { id: 'WE-115-BD1', code: 'DE 115', title: 'Drawing',
+    type: 'WeeklyElective', cohort: 'BDes 1',
+    faculty: ['Amitesh'], credits: 2,
+    prevWeeklySlots: ['LX'], schedule: 'Wed 14:00–16:55 [Slot X]' },
+  { id: 'WE-231-BD2', code: 'DE 231', title: 'Design, Society, Culture and Env',
+    type: 'WeeklyElective', cohort: 'BDes 2',
+    faculty: ['Kartikeya'], credits: 2,
+    prevWeeklySlots: ['LX'], schedule: 'Wed 14:00–16:55 [Slot X]' },
+  { id: 'WE-207-BD2', code: 'DE 207', title: 'Drawing',
+    type: 'WeeklyElective', cohort: 'BDes 2',
+    faculty: ['Amitesh'], credits: 2,
+    prevWeeklySlots: ['XC'], schedule: 'Wed 17:05–18:00' },
+]
 
 export const slotSystems = [
   {

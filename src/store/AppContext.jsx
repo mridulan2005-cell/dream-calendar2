@@ -3,10 +3,11 @@ import {
   courses as seedCourses,
   changeRequests as seedRequests,
   sharedAccess as seedShared,
+  weeklyElectives as seedWeeklyElectives,
 } from '../data/seed.js'
 import { SEED_CURRICULUM } from '../data/curriculum.js'
 import { DEFAULT_SLOT_SYSTEM, cloneSlotSystem } from '../data/slotSystem.js'
-import { applyOp, detectConflicts } from '../logic/timetable.js'
+import { applyOp, detectConflicts, clashKey } from '../logic/timetable.js'
 
 const AppContext = createContext(null)
 
@@ -28,18 +29,25 @@ function loadSlotSystem() {
 }
 
 const initialState = {
-  // Slot AND venue allotment start EMPTY: no course has weeks or a room by
-  // default. Last year's values are kept on `prevSlots` / `prevVenue` purely as
-  // an on-screen reference.
+  // A new term is PRE-POPULATED with last year's mapping by default: every course
+  // carries over its previous weeks and room, so the coordinator starts from the
+  // previous timetable and edits from there (rather than allotting from scratch).
+  // `prevSlots` / `prevVenue` still hold last year's values as the on-screen
+  // reference (e.g. the "optimal slot" hints in the grid). This carry-over flows
+  // to every surface that reads `courses` — the sem & week grid, master timetable,
+  // and the slot / venue allotment pages.
   courses: seedCourses.map((c) => ({
     ...c,
-    prevSlots: c.slots,
+    prevSlots: c.prevSlots ?? c.slots,
     prevVenue: c.venue,
-    slots: [],
-    venue: '',
   })),
   changeRequests: seedRequests,
   sharedAccess: seedShared,
+  // Weekly electives likewise carry over to the slots where they ran last year.
+  weeklyElectives: seedWeeklyElectives.map((e) => ({
+    ...e,
+    weeklySlots: e.prevWeeklySlots?.length ? [...e.prevWeeklySlots] : null,
+  })),
   // The BDes programme curriculum — the versioned knowledge layer that defines
   // what each batch studies per semester. Editable on the Curriculum page.
   curriculum: SEED_CURRICULUM,
@@ -57,6 +65,10 @@ const initialState = {
   // Which planner step the list window is on. Synced across tabs so the grid
   // editor knows whether it's a slot surface (editable) or a venue surface.
   activeStep: 'courses',
+  // Clashes the coordinator has explicitly dismissed (by clashKey). They drop
+  // out of the live conflict analysis until the underlying placement changes and
+  // a genuinely different clash re-arises.
+  dismissedClashes: [],
   workflow: {
     // Each step is unlocked only after the previous one is explicitly marked done.
     coursesFinalised: false,
@@ -75,11 +87,16 @@ const initialState = {
 const UNDOABLE = new Set([
   'UPDATE_COURSE',
   'UPDATE_COURSES',
+  'UPDATE_WEEKLY_ELECTIVE',
   'ACCEPT_REQUEST',
   'REJECT_REQUEST',
   'RESOLVE_REQUESTS',
 ])
-const snapshot = (s) => ({ courses: s.courses, changeRequests: s.changeRequests })
+const snapshot = (s) => ({
+  courses: s.courses,
+  changeRequests: s.changeRequests,
+  weeklyElectives: s.weeklyElectives,
+})
 
 // History wrapper around the base reducer: records a snapshot before each
 // undoable change, and handles UNDO / REDO.
@@ -128,6 +145,12 @@ function baseReducer(state, action) {
       const byId = new Map(action.courses.map((c) => [c.id, c]))
       const courses = state.courses.map((c) => byId.get(c.id) || c)
       return { ...state, courses }
+    }
+    case 'UPDATE_WEEKLY_ELECTIVE': {
+      const weeklyElectives = state.weeklyElectives.map((e) =>
+        e.id === action.elective.id ? action.elective : e,
+      )
+      return { ...state, weeklyElectives }
     }
     case 'REMOVE_COURSE':
       return { ...state, courses: state.courses.filter((c) => c.id !== action.id) }
@@ -196,6 +219,11 @@ function baseReducer(state, action) {
 
     case 'SET_ACTIVE_STEP':
       return { ...state, activeStep: action.step }
+
+    case 'DISMISS_CLASH':
+      return state.dismissedClashes.includes(action.key)
+        ? state
+        : { ...state, dismissedClashes: [...state.dismissedClashes, action.key] }
 
     // Replace the whole curriculum knowledge layer (the Curriculum page computes
     // the next object immutably: edits, new versions, batch reassignments).
@@ -294,6 +322,7 @@ export function AppProvider({ children }) {
       selectedCourseIds: s.selectedCourseIds,
       activeStep: s.activeStep,
       slotSystem: s.slotSystem,
+      weeklyElectives: s.weeklyElectives,
     })
     const ch = new BroadcastChannel('timetable-sync')
     channelRef.current = ch
@@ -338,6 +367,7 @@ export function AppProvider({ children }) {
         selectedCourseIds: state.selectedCourseIds,
         activeStep: state.activeStep,
         slotSystem: state.slotSystem,
+        weeklyElectives: state.weeklyElectives,
       },
     })
   }, [
@@ -349,10 +379,29 @@ export function AppProvider({ children }) {
     state.selectedCourseIds,
     state.activeStep,
     state.slotSystem,
+    state.weeklyElectives,
   ])
 
-  // Derived: live conflict analysis over the current courses.
-  const conflicts = useMemo(() => detectConflicts(state.courses), [state.courses])
+  // Derived: live conflict analysis over the current courses, minus any clashes
+  // the coordinator has dismissed (and their cell/course markers rebuilt to match,
+  // so a dismissed clash also clears its red grid highlight and unblocks publish).
+  const conflicts = useMemo(() => {
+    const raw = detectConflicts(state.courses)
+    if (!state.dismissedClashes?.length) return raw
+    const dismissed = new Set(state.dismissedClashes)
+    const kept = raw.conflicts.filter((c) => !dismissed.has(clashKey(c)))
+    if (kept.length === raw.conflicts.length) return raw
+    const conflictCells = new Set()
+    const conflictCourseIds = new Set()
+    for (const c of kept) {
+      const [idA, idB] = c.courseIds
+      conflictCourseIds.add(idA)
+      conflictCourseIds.add(idB)
+      conflictCells.add(`${idA}@${c.slot}`)
+      conflictCells.add(`${idB}@${c.slot}`)
+    }
+    return { conflicts: kept, conflictCourseIds, conflictCells }
+  }, [state.courses, state.dismissedClashes])
 
   const pendingRequests = useMemo(
     () => state.changeRequests.filter((r) => r.status === 'pending'),
@@ -367,11 +416,13 @@ export function AppProvider({ children }) {
       // action creators
       updateCourse: (course) => dispatch({ type: 'UPDATE_COURSE', course }),
       updateCourses: (courses) => dispatch({ type: 'UPDATE_COURSES', courses }),
+      updateWeeklyElective: (elective) => dispatch({ type: 'UPDATE_WEEKLY_ELECTIVE', elective }),
       finaliseCourses: () => dispatch({ type: 'FINALISE_COURSES' }),
       setStepDone: (step, value) => dispatch({ type: 'SET_STEP_DONE', step, value }),
       setSelectedCourse: (id) => dispatch({ type: 'SET_SELECTED_COURSE', id }),
       setSelectedCourses: (ids) => dispatch({ type: 'SET_SELECTED_COURSES', ids }),
       setActiveStep: (step) => dispatch({ type: 'SET_ACTIVE_STEP', step }),
+      dismissClash: (key) => dispatch({ type: 'DISMISS_CLASH', key }),
       setCurriculum: (curriculum) => dispatch({ type: 'SET_CURRICULUM', curriculum }),
       updateSlotSystem: (slotSystem) => dispatch({ type: 'SET_SLOT_SYSTEM', slotSystem }),
       resetSlotSystem: () => dispatch({ type: 'SET_SLOT_SYSTEM', slotSystem: cloneSlotSystem() }),

@@ -2,11 +2,9 @@ import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   CalendarDays,
-  Image,
   Users,
   Star,
   Folder,
-  FolderClosed,
   GraduationCap,
   PanelLeftClose,
   PanelLeftOpen,
@@ -15,12 +13,10 @@ import ThemeToggle from './ThemeToggle.jsx'
 
 const items = [
   { label: 'Today', icon: CalendarDays, badge: '24', to: '#today' },
-  { label: 'Campusites', icon: Image, to: '#campusites' },
   { label: 'IITB Employees', icon: Users, to: '#employees' },
   { label: 'Faculty Members: IDC', icon: Star, to: '#faculty' },
   { label: 'Programme Curriculum', icon: GraduationCap, to: '/curriculum', primary: true },
-  { label: 'Department Timetable', icon: Folder, to: '/planner', primary: true },
-  { label: 'Blank', icon: FolderClosed, to: '#blank' },
+  { label: 'Department Timetable', icon: Folder, to: '/timetables', primary: true },
 ]
 
 // The collapse preference is shared across every surface that renders the main
