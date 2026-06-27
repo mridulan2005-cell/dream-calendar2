@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { createPortal } from 'react-dom'
+import { useNavigate } from 'react-router-dom'
 import {
   GraduationCap,
   Pencil,
@@ -15,11 +16,110 @@ import {
   RotateCcw,
   History,
   ArrowLeft,
+  CalendarRange,
+  FilePlus2,
+  Send,
+  Clock3,
 } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
 import { PROGRAMME_IDS, entryCredits, semStatus, SEED_CURRICULUM } from '../data/curriculum.js'
 
 const deepClone = (x) => JSON.parse(JSON.stringify(x))
+
+// The signed-in coordinator — stamped onto a proposal so the action history
+// records who proposed a change. (Prototype: a single known user.)
+const CURRENT_USER = '24b3629@iitb.ac.in'
+
+// Carry the youngest batch's curriculum forward into a fresh, not-yet-published
+// version for the next incoming batch, and enrol that batch — returning a NEW
+// curriculum (immutable). A no-op if the upcoming batch already exists. This is
+// what makes the upcoming batch selectable inside the "Propose change" flow.
+function withUpcomingBatch(curriculum, programme) {
+  const prog = curriculum[programme]
+  const { versions, batches } = prog
+  const youngest = [...batches].sort((a, b) => b.admitYear - a.admitYear)[0]
+  const nextYear = youngest.admitYear + 1
+  const upcomingId = String(nextYear)
+  if (batches.some((b) => b.id === upcomingId)) return curriculum
+
+  const prefix = { BDes: 'C', MDes: 'M', PhD: 'P' }[programme] || 'C'
+  const newId = `${prefix}${Object.keys(versions).length + 1}`
+  const base = versions[youngest.versionId]
+  const newVersion = {
+    id: newId,
+    label: `${nextYear} Curriculum`,
+    effectiveFromYear: nextYear,
+    approved: false,
+    basedOn: youngest.versionId,
+    note: `Carried forward from Batch ${youngest.admitYear}. Proposed — pending review.`,
+    semesters: deepClone(base.semesters),
+  }
+  const newBatch = {
+    id: upcomingId,
+    label: `${nextYear}–${nextYear + 4}`,
+    admitYear: nextYear,
+    standing: 0,
+    currentSem: youngest.currentSem - 2,
+    versionId: newId,
+  }
+  return {
+    ...curriculum,
+    [programme]: { ...prog, versions: { ...versions, [newId]: newVersion }, batches: [...batches, newBatch] },
+  }
+}
+
+// When a new version appears in `next` that the proposal baseline doesn't have
+// yet (e.g. the user switched programme mid-proposal and we just carried a batch
+// forward), fold its pristine, carried-forward state into the baseline — so a
+// later edit to it diffs against the carry-forward, not against "nothing".
+function foldNewVersions(baseline, next, programme) {
+  const bl = baseline[programme]
+  const nx = next[programme]
+  if (!bl || !nx) return baseline
+  const versions = { ...bl.versions }
+  let changed = false
+  for (const [vid, v] of Object.entries(nx.versions)) {
+    if (!versions[vid]) {
+      versions[vid] = v
+      changed = true
+    }
+  }
+  return changed ? { ...baseline, [programme]: { ...bl, versions } } : baseline
+}
+
+// The net set of changes a proposal currently holds: every added / modified /
+// removed entry across the selected batches' versions, diffed against the
+// baseline snapshot taken when the proposal began. Each carries its versionId so
+// a single change can be reverted to the baseline.
+function proposalDiff(curriculum, baseline, programme, batchIds) {
+  const prog = curriculum[programme]
+  const blProg = baseline?.[programme]
+  if (!prog || !blProg) return []
+  const versionIds = [
+    ...new Set(prog.batches.filter((b) => batchIds.includes(b.id)).map((b) => b.versionId)),
+  ]
+  const out = []
+  for (const vid of versionIds) {
+    const v = prog.versions[vid]
+    const bv = blProg.versions[vid]
+    if (!v || !bv) continue
+    for (const sem of v.semesters) {
+      const baseSem = bv.semesters.find((s) => s.n === sem.n)
+      if (!baseSem) continue
+      for (const c of diffEntryChanges(baseSem.entries, sem.entries, sem.n)) out.push({ ...c, versionId: vid })
+    }
+  }
+  return out.sort((a, b) => b.semN - a.semN)
+}
+
+// The academic term (Autumn / Spring + calendar year) a given semester runs in.
+// Sem 1 is the Autumn of the admit year; each later semester is half a year on —
+// odd semesters in Autumn, even semesters in the following Spring.
+const termOfSem = (admitYear, n) => {
+  const autumn = n % 2 === 1
+  const year = autumn ? admitYear + (n - 1) / 2 : admitYear + n / 2
+  return { semester: autumn ? 'Autumn' : 'Spring', year, label: `${autumn ? 'Autumn' : 'Spring'} ${year}` }
+}
 
 // Pristine snapshot of every seeded curriculum version, keyed by version id.
 // Edits are immutable, so this stays untouched and serves as the baseline we
@@ -236,10 +336,18 @@ export default function Curriculum() {
   const [selectedBatches, setSelectedBatches] = useState(() =>
     curriculum.BDes.batches.map((b) => b.id),
   )
-  const [createOpen, setCreateOpen] = useState(false)
+  // Propose-change flow. `proposalBaseline` is the curriculum snapshot the
+  // proposal's net changes are diffed against (taken once the upcoming batch has
+  // been carried forward); `preProposal` is the full state to restore on discard.
+  const [proposing, setProposing] = useState(false)
+  const [proposalBaseline, setProposalBaseline] = useState(null)
+  const [preProposal, setPreProposal] = useState(null)
+  const [proposalReason, setProposalReason] = useState('')
   // A running log of edits made this session — each save appends one entry.
   // Newest first, so the dock reads most-recent → oldest left to right.
   const [history, setHistory] = useState([])
+  // A submitted proposal opened from the history tray, shown in a detail panel.
+  const [openProposal, setOpenProposal] = useState(null)
 
   // Everything below is scoped to the selected programme: its meta, year
   // grouping, curriculum versions and enrolled batches.
@@ -255,12 +363,20 @@ export default function Curriculum() {
 
   const visibleBatches = ordered.filter((b) => selectedBatches.includes(b.id))
 
+  // The net set of changes the open proposal currently holds (derived, always
+  // accurate), diffed against the baseline taken when the proposal began.
+  const proposalChanges = useMemo(
+    () => (proposing ? proposalDiff(curriculum, proposalBaseline, programme, selectedBatches) : []),
+    [proposing, curriculum, proposalBaseline, programme, selectedBatches],
+  )
+
   // Switching programme (or perspective) repopulates the batch picker: a
   // coordinator sees every batch by default; a student only their own latest.
+  // While proposing, the proposal handlers own the selection, so we skip this.
   useEffect(() => {
+    if (proposing) return
     const ids = [...batches].sort((a, b) => b.admitYear - a.admitYear)
     setSelectedBatches(isStudent ? [ids[0].id] : ids.map((b) => b.id))
-    setCreateOpen(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [programme, perspective])
 
@@ -271,10 +387,10 @@ export default function Curriculum() {
   const toggleAllBatches = () => setSelectedBatches(allSelected ? [] : ordered.map((b) => b.id))
 
   // --- Immutable curriculum mutations -------------------------------------
-  const updateSemEntries = (versionId, semN, nextEntries) => {
+  // Write one semester's entries (no logging) — the shared primitive behind both
+  // normal edits and proposal reverts.
+  const writeSemEntries = (versionId, semN, nextEntries) => {
     const v = versions[versionId]
-    const prevEntries = v.semesters.find((s) => s.n === semN)?.entries || []
-    const changes = diffEntryChanges(prevEntries, nextEntries, semN)
     const nextSems = v.semesters.map((s) => (s.n === semN ? { ...s, entries: nextEntries } : s))
     setCurriculum({
       ...curriculum,
@@ -283,8 +399,15 @@ export default function Curriculum() {
         versions: { ...versions, [versionId]: { ...v, semesters: nextSems } },
       },
     })
-    // Log each individual change as its own minimal card — newest first.
-    if (changes.length) {
+  }
+  const updateSemEntries = (versionId, semN, nextEntries) => {
+    const v = versions[versionId]
+    const prevEntries = v.semesters.find((s) => s.n === semN)?.entries || []
+    const changes = diffEntryChanges(prevEntries, nextEntries, semN)
+    writeSemEntries(versionId, semN, nextEntries)
+    // While proposing, edits are summarised live in the proposal panel (derived),
+    // so they don't also flood the global action history.
+    if (!proposing && changes.length) {
       const batch = batches.find((b) => b.versionId === versionId)
       const stamp = Date.now()
       const items = changes.map((c, i) => ({
@@ -300,43 +423,65 @@ export default function Curriculum() {
       setHistory((h) => [...items, ...h])
     }
   }
-  // Create the curriculum for the next incoming batch: carry the youngest
-  // batch's curriculum forward into a fresh version, marked "ongoing" (not yet
-  // published) so it stays editable until approved. Enrols the new batch and
-  // jumps to it.
-  const createNextBatch = () => {
-    const prefix = { BDes: 'C', MDes: 'M', PhD: 'P' }[programme] || 'C'
-    const newId = `${prefix}${Object.keys(versions).length + 1}`
-    const base = versions[youngest.versionId]
-    const newVersion = {
-      id: newId,
-      label: `${nextYear} Curriculum`,
-      effectiveFromYear: nextYear,
-      approved: false, // ongoing — not published like the others
-      basedOn: youngest.versionId, // for diffing against the last batch
-      note: `Carried forward from Batch ${youngest.admitYear}. Ongoing — not yet published.`,
-      semesters: deepClone(base.semesters),
+
+  // --- Propose-change flow -------------------------------------------------
+  // Enter the flow: carry the upcoming batch forward (so it's selectable), snap
+  // the baseline, and focus the picker on that incoming batch.
+  const startProposal = () => {
+    const next = withUpcomingBatch(curriculum, programme)
+    setPreProposal(curriculum)
+    setCurriculum(next)
+    setProposalBaseline(next)
+    setProposalReason('')
+    setSelectedBatches([String(nextYear)])
+    setProposing(true)
+  }
+  // Switch the proposal to another programme: ensure its upcoming batch exists,
+  // fold it into the baseline, and focus it.
+  const switchProposalProgramme = (pid) => {
+    const before = new Set(curriculum[pid].batches.map((b) => b.id))
+    const next = withUpcomingBatch(curriculum, pid)
+    setCurriculum(next)
+    setProposalBaseline((bl) => foldNewVersions(bl, next, pid))
+    const orderedPid = [...next[pid].batches].sort((a, b) => b.admitYear - a.admitYear)
+    const upcoming = orderedPid.find((b) => !before.has(b.id)) || orderedPid[0]
+    setProgramme(pid)
+    setSelectedBatches([upcoming.id])
+  }
+  const revertProposalChange = (c) => {
+    const sem = versions[c.versionId]?.semesters.find((s) => s.n === c.semN)
+    if (sem) writeSemEntries(c.versionId, c.semN, revertEntries(sem.entries, c))
+  }
+  const submitProposal = () => {
+    if (!proposalChanges.length || !proposalReason.trim()) return
+    const batchLabels = selectedBatches
+      .map((id) => ordered.find((b) => b.id === id)?.admitYear)
+      .filter(Boolean)
+    const entry = {
+      id: `prop-${Date.now()}`,
+      kind: 'proposal',
+      programmeLabel: programMeta.label,
+      batchLabels,
+      changes: proposalChanges.map((c) => ({ type: c.type, code: c.code, name: c.name, semN: c.semN })),
+      reason: proposalReason.trim(),
+      proposedBy: CURRENT_USER,
+      status: 'Pending review',
+      ts: Date.now(),
     }
-    // currentSem at "now" follows the same odd/even cadence: two sems per year
-    // behind the next-younger batch (so an incoming batch sits before Sem 1).
-    const newBatch = {
-      id: String(nextYear),
-      label: `${nextYear}–${nextYear + 4}`,
-      admitYear: nextYear,
-      standing: 0,
-      currentSem: youngest.currentSem - 2,
-      versionId: newId,
-    }
-    setCurriculum({
-      ...curriculum,
-      [programme]: {
-        ...prog,
-        versions: { ...versions, [newId]: newVersion },
-        batches: [...batches, newBatch],
-      },
-    })
-    setSelectedBatches([newBatch.id])
-    setCreateOpen(false)
+    setHistory((h) => [entry, ...h])
+    setProposing(false)
+    setProposalBaseline(null)
+    setPreProposal(null)
+    setProposalReason('')
+  }
+  const cancelProposal = () => {
+    if (preProposal) setCurriculum(preProposal)
+    const src = preProposal?.[programme]?.batches || batches
+    setProposing(false)
+    setProposalBaseline(null)
+    setPreProposal(null)
+    setProposalReason('')
+    setSelectedBatches([...src].sort((a, b) => b.admitYear - a.admitYear).map((b) => b.id))
   }
 
   const jumpToSem = (h) => {
@@ -350,21 +495,27 @@ export default function Curriculum() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-            Knowledge Layer
+            {proposing ? 'Knowledge Layer · Proposing a change' : 'Knowledge Layer'}
           </div>
-          <h1 className="mt-1 text-2xl font-bold">Programme Curriculum</h1>
+          <h1 className="mt-1 text-2xl font-bold">
+            {proposing ? 'Propose a curriculum change' : 'Programme Curriculum'}
+          </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            {programMeta.label} · {programMeta.durationLabel} · {programMeta.totalCredits} credits
+            {proposing
+              ? 'Pick a programme and batch, edit any semester — your changes collect on the right.'
+              : `${programMeta.label} · ${programMeta.durationLabel} · ${programMeta.totalCredits} credits`}
           </p>
         </div>
-        <Segmented
-          value={perspective}
-          onChange={setPerspective}
-          options={[
-            { id: 'coordinator', label: 'Coordinator', icon: Pencil },
-            { id: 'student', label: 'Student', icon: GraduationCap },
-          ]}
-        />
+        {!proposing && (
+          <Segmented
+            value={perspective}
+            onChange={setPerspective}
+            options={[
+              { id: 'coordinator', label: 'Coordinator', icon: Pencil },
+              { id: 'student', label: 'Student', icon: GraduationCap },
+            ]}
+          />
+        )}
       </div>
 
       {/* Programme + batch pickers (dual listbox) */}
@@ -373,7 +524,7 @@ export default function Curriculum() {
           label="Programme"
           items={PROGRAMME_IDS.map((id) => ({ id, label: curriculum[id].program.label }))}
           selected={[programme]}
-          onSelect={setProgramme}
+          onSelect={proposing ? switchProposalProgramme : setProgramme}
         />
         <Listbox
           label="Batch"
@@ -381,34 +532,34 @@ export default function Curriculum() {
           items={ordered.map((b) => ({
             id: b.id,
             label: `Batch ${b.admitYear}`,
-            hint: versions[b.versionId].approved ? undefined : 'ongoing',
+            hint: versions[b.versionId].approved ? undefined : proposing ? 'upcoming' : 'ongoing',
           }))}
           selected={selectedBatches}
           onSelect={isStudent ? selectBatch : toggleBatch}
-          onToggleAll={!isStudent ? toggleAllBatches : undefined}
+          onToggleAll={!isStudent && !proposing ? toggleAllBatches : undefined}
         />
 
         <div className="ml-auto flex flex-col items-end gap-3">
-          {perspective === 'coordinator' && (
+          {!proposing && perspective === 'coordinator' && (
             <button
-              onClick={() => setCreateOpen(true)}
+              onClick={startProposal}
               className="flex items-center gap-1.5 rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-95"
             >
-              <Plus size={15} /> New · Batch {nextYear}
+              <FilePlus2 size={15} /> Propose change
             </button>
           )}
-          <span className="hidden items-center gap-3 text-[11px] text-slate-400 sm:flex">
-            <span className="flex items-center gap-1">
-              <Check size={11} /> completed
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-accent" /> current
-            </span>
-          </span>
+          {proposing && (
+            <button
+              onClick={cancelProposal}
+              className="rounded-full px-4 py-1.5 text-sm font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+            >
+              Discard proposal
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Expanded curriculum */}
+      {/* Expanded curriculum (+ proposal panel while proposing) */}
       <div className="mt-6">
         {visibleBatches.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 py-16 text-center text-sm text-slate-400 dark:border-slate-800">
@@ -421,21 +572,37 @@ export default function Curriculum() {
             years={years}
             perspective={perspective}
             onSaveSem={updateSemEntries}
+            hideReview={proposing}
+            live={proposing}
+            rightPanel={
+              proposing ? (
+                <ProposalPanel
+                  programmeLabel={programMeta.label}
+                  batchLabels={selectedBatches
+                    .map((id) => ordered.find((b) => b.id === id)?.admitYear)
+                    .filter(Boolean)}
+                  changes={proposalChanges}
+                  reason={proposalReason}
+                  onReason={setProposalReason}
+                  onRevert={revertProposalChange}
+                  onSubmit={submitProposal}
+                  onCancel={cancelProposal}
+                />
+              ) : null
+            }
           />
         )}
       </div>
 
-      {createOpen && (
-        <CreateBatchModal
-          fromBatch={youngest}
-          fromVersion={versions[youngest.versionId]}
-          nextYear={nextYear}
-          onCancel={() => setCreateOpen(false)}
-          onConfirm={createNextBatch}
-        />
+      <VersionHistoryBar
+        history={history}
+        onJump={jumpToSem}
+        onOpenProposal={setOpenProposal}
+        onClear={() => setHistory([])}
+      />
+      {openProposal && (
+        <ProposalDetailPanel proposal={openProposal} onClose={() => setOpenProposal(null)} />
       )}
-
-      <VersionHistoryBar history={history} onJump={jumpToSem} onClear={() => setHistory([])} />
     </div>
   )
 }
@@ -447,7 +614,7 @@ export default function Curriculum() {
 // it stays correct when the sidebar collapses. Every edit appends minimal change
 // cards — newest first (leftmost) — chained left by a light arrow, each clickable
 // to jump back to the semester it touched. Layout references the second image.
-function VersionHistoryBar({ history, onJump, onClear }) {
+function VersionHistoryBar({ history, onJump, onOpenProposal, onClear }) {
   // Track the main content area's left/width so the bar spans exactly it.
   // Guard against no-op updates: returning the previous state when the measured
   // box is unchanged lets React bail out, which prevents a ResizeObserver →
@@ -488,7 +655,11 @@ function VersionHistoryBar({ history, onJump, onClear }) {
           {history.map((h, i) => (
             <div key={h.id} className="flex shrink-0 items-center gap-1.5">
               {i > 0 && <ArrowLeft size={14} className="shrink-0 text-slate-300 dark:text-slate-600" />}
-              <ActionCard h={h} onClick={() => onJump(h)} />
+              {h.kind === 'proposal' ? (
+                <ProposalCard h={h} onClick={() => onOpenProposal(h)} />
+              ) : (
+                <ActionCard h={h} onClick={() => onJump(h)} />
+              )}
             </div>
           ))}
         </div>
@@ -534,18 +705,147 @@ function ActionCard({ h, onClick }) {
   )
 }
 
-function VersionTag({ version }) {
+// A submitted change proposal in the action history: a slightly wider card that
+// records what was proposed, who proposed it, and its review status.
+function ProposalCard({ h, onClick }) {
+  const count = h.changes?.length ?? 0
+  const scope = h.batchLabels?.length ? `Batch ${h.batchLabels.join(', ')}` : h.programmeLabel
   return (
-    <span
-      className={`inline-flex w-fit items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-        version.approved
-          ? 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
-          : 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
-      }`}
+    <button
+      onClick={onClick}
+      title="Open this proposal"
+      className="flex w-56 shrink-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-accent dark:border-slate-800 dark:bg-slate-900"
     >
-      {version.id}
-      {!version.approved && ' · ongoing'}
-    </span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-[12px] font-semibold text-slate-700 dark:text-slate-200">
+          <FilePlus2 size={12} className="shrink-0 text-accent" />
+          <span className="truncate">Change proposal</span>
+        </div>
+        <span className="flex shrink-0 items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
+          <Clock3 size={9} /> {h.status}
+        </span>
+      </div>
+      <div className="truncate text-[10px] text-slate-400">
+        {scope} · {count} change{count === 1 ? '' : 's'}
+      </div>
+      <div className="truncate text-[10px] text-slate-400">by {h.proposedBy}</div>
+    </button>
+  )
+}
+
+// ── Proposal detail panel — opened from a proposal card in the history tray ──
+// A clean right-side drawer: what was proposed (the change list) and why (the
+// reason), with the meta and review status. Read-only — no fills beyond the
+// per-change colour that carries meaning.
+const PROPOSAL_TYPE_LABEL = { added: 'Added', removed: 'Removed', modified: 'Changed' }
+function ProposalDetailPanel({ proposal, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose()
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const changes = proposal.changes || []
+  const scope = proposal.batchLabels?.length
+    ? `Batch ${proposal.batchLabels.join(', ')}`
+    : proposal.programmeLabel
+  const when = new Date(proposal.ts).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70] flex justify-end" onMouseDown={onClose}>
+      <div className="absolute inset-0 bg-slate-900/20 backdrop-blur-[1px]" />
+      <aside
+        onMouseDown={(e) => e.stopPropagation()}
+        className="relative flex h-full w-[24rem] max-w-[90vw] flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">
+              <FilePlus2 size={14} className="shrink-0 text-accent" /> Change proposal
+            </div>
+            <div className="mt-1 truncate text-xs text-slate-400">
+              {proposal.programmeLabel} · {scope}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+          >
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-3 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
+          <span className="flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
+            <Clock3 size={10} /> {proposal.status}
+          </span>
+          <span className="truncate">by {proposal.proposedBy}</span>
+          <span className="ml-auto shrink-0 text-slate-400">{when}</span>
+        </div>
+
+        <div className="thin-scroll flex-1 overflow-y-auto px-5 py-4">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Reason</div>
+          <p className="mt-1.5 whitespace-pre-wrap text-sm text-slate-700 dark:text-slate-200">
+            {proposal.reason || <span className="text-slate-400">No reason given.</span>}
+          </p>
+
+          <div className="mt-5 flex items-center justify-between">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              Changes requested
+            </div>
+            <span className="tabular-nums text-xs font-medium text-slate-400">{changes.length}</span>
+          </div>
+          <div className="mt-2 space-y-1.5">
+            {changes.length === 0 ? (
+              <div className="py-6 text-center text-xs text-slate-400">No changes recorded.</div>
+            ) : (
+              changes.map((c, i) => {
+                const removed = c.type === 'removed'
+                const tone = CHANGE_TONE[c.type] || CHANGE_TONE.modified
+                return (
+                  <div
+                    key={i}
+                    className="flex items-start gap-2.5 rounded-lg border border-slate-100 px-3 py-2 dark:border-slate-800"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-1.5">
+                        {c.code && (
+                          <span
+                            className={`shrink-0 text-[11px] font-semibold ${
+                              removed ? 'text-red-400 line-through dark:text-red-400/70' : 'text-slate-400'
+                            }`}
+                          >
+                            {c.code}
+                          </span>
+                        )}
+                        <span
+                          className={`truncate text-[13px] ${
+                            removed
+                              ? 'text-red-400 line-through dark:text-red-400/70'
+                              : 'text-slate-700 dark:text-slate-200'
+                          }`}
+                        >
+                          {c.name || c.code}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-slate-400">Sem {c.semN}</div>
+                    </div>
+                    <span className={`shrink-0 text-[10px] font-bold ${tone}`}>
+                      {PROPOSAL_TYPE_LABEL[c.type] || 'Changed'}
+                    </span>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </div>
+      </aside>
+    </div>,
+    document.body,
   )
 }
 
@@ -564,7 +864,7 @@ function standingLabel(batch, version) {
 // structure — the current semester carries a tag and the rail tracks whatever
 // section is in view (scroll-spy), so a long page stays navigable with one
 // click. Read-focused: editing still lives in the timeline/overview views.
-function ExpandedView({ batches, versions, years, perspective, onSaveSem }) {
+function ExpandedView({ batches, versions, years, perspective, onSaveSem, hideReview = false, rightPanel = null, live = false }) {
   const [activeId, setActiveId] = useState(null)
   // Which batch's "View changes" review is open (inline diff + side panel), and
   // which individual changes the coordinator has already seen (figma-style unread
@@ -678,8 +978,7 @@ function ExpandedView({ batches, versions, years, perspective, onSaveSem }) {
               <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2 dark:border-slate-800">
                 <h2 className="text-lg font-bold text-slate-900 dark:text-white">Batch {b.admitYear}</h2>
                 <span className="text-xs text-slate-400">{standingLabel(b, version)}</span>
-                <VersionTag version={version} />
-                {changes.length > 0 && (
+                {!hideReview && changes.length > 0 && (
                   <button
                     onClick={() => setChangesBatchId(reviewing ? null : b.id)}
                     className={`ml-auto flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs transition ${
@@ -709,6 +1008,7 @@ function ExpandedView({ batches, versions, years, perspective, onSaveSem }) {
                     reviewing={reviewing}
                     canEdit={canEdit}
                     onSaveSem={onSaveSem}
+                    live={live}
                   />
                 ))}
               </div>
@@ -717,18 +1017,123 @@ function ExpandedView({ batches, versions, years, perspective, onSaveSem }) {
         })}
       </div>
 
-      {reviewBatch && reviewVersion && (
-        <ChangesPanel
-          key={reviewBatch.id}
-          batch={reviewBatch}
-          changes={reviewChanges}
-          seen={seen}
-          onSeen={markSeen}
-          onRevert={revertChange}
-          onJump={(c) => jumpTo(`sem-${reviewBatch.id}-${c.semN}`)}
-          onClose={() => setChangesBatchId(null)}
+      {/* Right rail: the proposal panel while proposing, else the change-review
+          panel when a batch's "View changes" is open. */}
+      {rightPanel
+        ? rightPanel
+        : reviewBatch && reviewVersion && (
+            <ChangesPanel
+              key={reviewBatch.id}
+              batch={reviewBatch}
+              changes={reviewChanges}
+              seen={seen}
+              onSeen={markSeen}
+              onRevert={revertChange}
+              onJump={(c) => jumpTo(`sem-${reviewBatch.id}-${c.semN}`)}
+              onClose={() => setChangesBatchId(null)}
+            />
+          )}
+    </div>
+  )
+}
+
+// ── Proposal panel — the right rail of the "Propose change" flow ─────────────
+// Clean and minimal: a quiet running list of the edits the proposal holds (colour
+// only where it carries meaning — green added, red removed, amber modified), a
+// reason field, and a single submit CTA. No fills, no chrome beyond the border.
+function ProposalPanel({ programmeLabel, batchLabels, changes, reason, onReason, onRevert, onSubmit, onCancel }) {
+  const canSubmit = changes.length > 0 && reason.trim().length > 0
+  const scope = batchLabels.length
+    ? `${programmeLabel} · Batch ${batchLabels.join(', ')}`
+    : programmeLabel
+  return (
+    <aside className="sticky top-4 hidden h-fit max-h-[calc(100vh-7rem)] w-80 shrink-0 flex-col self-start overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 lg:flex">
+      <header className="border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Proposed changes</div>
+          <span className="tabular-nums text-xs font-medium text-slate-400">{changes.length}</span>
+        </div>
+        <div className="mt-0.5 truncate text-[11px] text-slate-400">{scope}</div>
+      </header>
+
+      <div className="thin-scroll min-h-[3rem] flex-1 overflow-y-auto">
+        {changes.length === 0 ? (
+          <div className="px-4 py-10 text-center text-xs text-slate-400">
+            No changes yet — edit any semester below and they’ll collect here.
+          </div>
+        ) : (
+          changes.map((c) => (
+            <ProposalChangeRow key={`${c.versionId}:${c.id}`} c={c} onRevert={() => onRevert(c)} />
+          ))
+        )}
+      </div>
+
+      <div className="border-t border-slate-200 px-4 py-3 dark:border-slate-800">
+        <label className="block text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Reason for change
+        </label>
+        <textarea
+          value={reason}
+          onChange={(e) => onReason(e.target.value)}
+          rows={3}
+          placeholder="Why is this change being proposed?"
+          className="mt-1.5 w-full resize-none rounded-lg border border-slate-200 bg-transparent px-3 py-2 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-accent focus:ring-1 focus:ring-accent dark:border-slate-700 dark:text-slate-200"
         />
-      )}
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            onClick={onSubmit}
+            disabled={!canSubmit}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100"
+          >
+            <Send size={15} /> Submit proposal
+          </button>
+          <button
+            onClick={onCancel}
+            className="rounded-lg px-3 py-2 text-sm font-medium text-slate-500 transition hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </aside>
+  )
+}
+
+function ProposalChangeRow({ c, onRevert }) {
+  const removed = c.type === 'removed'
+  const tone = CHANGE_TONE[c.type] || CHANGE_TONE.modified
+  return (
+    <div className="group flex items-start gap-2.5 border-b border-slate-100 px-4 py-2.5 last:border-0 dark:border-slate-800/70">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-1.5">
+          {c.code && (
+            <span
+              className={`shrink-0 text-[11px] font-semibold ${
+                removed ? 'text-red-400 line-through dark:text-red-400/70' : 'text-slate-400'
+              }`}
+            >
+              {c.code}
+            </span>
+          )}
+          <span
+            className={`truncate text-[13px] ${
+              removed ? 'text-red-400 line-through dark:text-red-400/70' : 'text-slate-700 dark:text-slate-200'
+            }`}
+          >
+            {c.name || c.code}
+          </span>
+        </div>
+        <div className="mt-0.5 text-[11px] text-slate-400">
+          Sem {c.semN} · <span className={`font-medium ${tone}`}>{changeSummary(c)}</span>
+        </div>
+      </div>
+      <button
+        onClick={onRevert}
+        title="Undo this change"
+        className="shrink-0 rounded-md p-1 text-slate-300 opacity-0 transition hover:bg-slate-100 hover:text-slate-600 focus:opacity-100 group-hover:opacity-100 dark:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+      >
+        <RotateCcw size={13} />
+      </button>
     </div>
   )
 }
@@ -736,7 +1141,8 @@ function ExpandedView({ batches, versions, years, perspective, onSaveSem }) {
 // One semester in the expanded view. Read-only by default; "Edit" flips the card
 // in place into the inline editor (no side panel). When the batch is under
 // change-review, the read view becomes a field-level diff against the base batch.
-function ExpandedSemCard({ batch, version, versions, years, semester: s, perspective, reviewing, canEdit, onSaveSem }) {
+function ExpandedSemCard({ batch, version, versions, years, semester: s, perspective, reviewing, canEdit, onSaveSem, live = false }) {
+  const navigate = useNavigate()
   const status = semStatus(batch, s.n)
   const id = `sem-${batch.id}-${s.n}`
   const diff = reviewing ? diffSem(version, versions, s.n) : null
@@ -745,6 +1151,23 @@ function ExpandedSemCard({ batch, version, versions, years, semester: s, perspec
   const editable = canEdit && status !== 'done'
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(() => deepClone(s.entries))
+
+  // In a proposal, edits are live: every change writes straight through, so it
+  // surfaces in the proposal panel immediately (no "Save" step — undo lives in
+  // the panel). Otherwise edits buffer in `draft` until Save.
+  const applyDraft = (next) => {
+    const resolved = typeof next === 'function' ? next(draft) : next
+    setDraft(resolved)
+    if (live) onSaveSem(version.id, s.n, resolved)
+  }
+
+  // The academic term this semester runs in, and a jump into the department
+  // timetable for it — carrying a breadcrumb so the timetable can come back here.
+  const term = termOfSem(batch.admitYear, s.n)
+  const goToTimetable = () =>
+    navigate(`/timetables?year=${term.year}&semester=${term.semester}`, {
+      state: { crumbs: [{ label: 'Programme Curriculum', to: '/curriculum' }] },
+    })
 
   const startEdit = () => {
     setDraft(deepClone(s.entries))
@@ -759,7 +1182,7 @@ function ExpandedSemCard({ batch, version, versions, years, semester: s, perspec
   return (
     <div
       id={id}
-      className={`scroll-mt-6 rounded-2xl border bg-white p-5 transition dark:bg-slate-900 ${
+      className={`group scroll-mt-6 rounded-2xl border bg-white p-5 transition dark:bg-slate-900 ${
         editing
           ? 'border-accent ring-2 ring-accent/40'
           : status === 'current'
@@ -777,6 +1200,15 @@ function ExpandedSemCard({ batch, version, versions, years, semester: s, perspec
           </span>
         )}
         <span className="ml-auto flex items-center gap-2">
+          {!editing && (
+            <button
+              onClick={goToTimetable}
+              title={`View the ${term.label} timetable`}
+              className="flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 opacity-0 transition hover:border-accent hover:text-accent focus:opacity-100 group-hover:opacity-100 dark:border-slate-700 dark:text-slate-300"
+            >
+              <CalendarRange size={13} /> Timetable
+            </button>
+          )}
           <CreditTag credits={editing ? draftCredits(draft) : s.totalCredits} label="total" />
           {canEdit && status === 'done' && !editing && (
             <span
@@ -801,22 +1233,36 @@ function ExpandedSemCard({ batch, version, versions, years, semester: s, perspec
       {editing ? (
         <>
           <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-            <Pencil size={13} className="shrink-0" /> Editing {version.label} — changes apply to every batch on this version.
+            <Pencil size={13} className="shrink-0" />{' '}
+            {live
+              ? 'Editing live — every change appears in the proposal on the right. Undo any change there.'
+              : `Editing ${version.label} — changes apply to every batch on this version.`}
           </div>
-          <SemEditView draft={draft} setDraft={setDraft} />
+          <SemEditView draft={draft} setDraft={live ? applyDraft : setDraft} />
           <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-            <button
-              onClick={() => setEditing(false)}
-              className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={save}
-              className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-white transition hover:brightness-95"
-            >
-              <Check size={15} /> Save changes
-            </button>
+            {live ? (
+              <button
+                onClick={() => setEditing(false)}
+                className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-white transition hover:brightness-95"
+              >
+                <Check size={15} /> Done
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => setEditing(false)}
+                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={save}
+                  className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-white transition hover:brightness-95"
+                >
+                  <Check size={15} /> Save changes
+                </button>
+              </>
+            )}
           </div>
         </>
       ) : diff && base ? (
@@ -1396,70 +1842,6 @@ function SemEditView({ draft, setDraft }) {
         <AddBtn onClick={() => add({ kind: 'elective', title: 'Open elective', credits: 6 })}>
           Add open elective
         </AddBtn>
-      </div>
-    </div>
-  )
-}
-
-// ── Create-next-batch confirmation ───────────────────────────────────────────
-// Carries the youngest batch's curriculum forward to the next incoming batch.
-// The new curriculum starts "ongoing" (unpublished) so it can be edited freely.
-function CreateBatchModal({ fromBatch, fromVersion, nextYear, onCancel, onConfirm }) {
-  useEffect(() => {
-    const onKey = (e) => e.key === 'Escape' && onCancel()
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onCancel])
-
-  return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm"
-      onMouseDown={onCancel}
-    >
-      <div
-        onMouseDown={(e) => e.stopPropagation()}
-        className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-slate-900"
-      >
-        <div className="flex items-start gap-3 px-6 pt-6">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent dark:bg-slate-800">
-            <Plus size={18} />
-          </span>
-          <div>
-            <h2 className="text-base font-semibold text-slate-900 dark:text-white">
-              Create curriculum for Batch {nextYear}?
-            </h2>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              It carries forward all eight semesters of{' '}
-              <b className="text-slate-700 dark:text-slate-200">Batch {fromBatch.admitYear}</b>'s
-              curriculum ({fromVersion.label}) by default. You can edit any semester afterwards.
-            </p>
-          </div>
-        </div>
-
-        <div className="px-6 py-5">
-          <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
-            <Clock size={16} className="shrink-0" />
-            <span>
-              Starts as <b>Ongoing</b> — it stays editable and isn't published like the other
-              curriculums until you approve it.
-            </span>
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-3 dark:border-slate-800">
-          <button
-            onClick={onCancel}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
-          >
-            <Plus size={15} /> Create curriculum
-          </button>
-        </div>
       </div>
     </div>
   )

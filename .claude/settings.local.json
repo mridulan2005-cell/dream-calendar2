@@ -10,7 +10,9 @@
       "Skill(run)",
       "Skill(run:*)",
       "Bash(git add *)",
-      "PowerShell(git push -u origin feat/slot-grid-editor)"
+      "PowerShell(git push -u origin feat/slot-grid-editor)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

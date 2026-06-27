@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { ArrowLeft, ArrowRight, Clock, ChevronRight, CalendarRange, Eye, LayoutGrid } from 'lucide-react'
 import TimetableGrid from '../components/TimetableGrid.jsx'
+import Breadcrumbs from '../components/Breadcrumbs.jsx'
 
 // The department's timetables, one per academic year. The current Autumn term is
 // the live draft being built in the planner; everything else is a published,
@@ -36,18 +37,25 @@ export default function DepartmentTimetable() {
   const [semester, setSemester] = useState('Autumn') // 'Autumn' | 'Spring'
   const [viewing, setViewing] = useState(null) // a static timetable being looked at
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  // Deep-link support: arriving with ?year=&semester= (e.g. from the curriculum
-  // timeline) opens that term's timetable directly. The live Autumn draft jumps
-  // to the planner; everything else opens the read-only viewer.
+  // Where we were opened from (e.g. the curriculum), so breadcrumbs can climb
+  // back. Threaded through navigation state and preserved across the param-clear
+  // below so it survives a refresh/back within this page.
+  const originCrumbs = location.state?.crumbs || []
+
+  // Deep-link support: arriving with ?year=&semester= (e.g. from the curriculum)
+  // opens that term's timetable directly. The live Autumn draft jumps to the
+  // planner; everything else opens the read-only viewer.
   useEffect(() => {
     const y = Number(searchParams.get('year'))
     const sem = searchParams.get('semester')
     if (!y || !sem) return
-    setSearchParams({}, { replace: true }) // consume the params so back/refresh is clean
+    // Consume the params so back/refresh is clean, but keep the breadcrumb state.
+    setSearchParams({}, { replace: true, state: location.state })
     if (y === 2026 && sem === 'Autumn') {
-      navigate('/planner')
+      navigate('/planner', { state: location.state })
       return
     }
     setSemester(sem)
@@ -55,12 +63,22 @@ export default function DepartmentTimetable() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  if (viewing) return <ReadOnlyTimetable timetable={viewing} onBack={() => setViewing(null)} />
+  if (viewing)
+    return (
+      <ReadOnlyTimetable
+        timetable={viewing}
+        originCrumbs={originCrumbs}
+        onBack={() => setViewing(null)}
+      />
+    )
 
   const list = timetablesFor(semester)
 
   return (
     <div className="mx-auto max-w-4xl pb-12">
+      {originCrumbs.length > 0 && (
+        <Breadcrumbs items={[...originCrumbs, { label: 'Timetables' }]} className="mb-3" />
+      )}
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
@@ -159,11 +177,18 @@ export default function DepartmentTimetable() {
 // A published timetable, just to look at: the master grid with the Student /
 // Faculty / Venue pivot, and nothing else — no review rail, no course tray, no
 // editing or drag-drop.
-function ReadOnlyTimetable({ timetable, onBack }) {
+function ReadOnlyTimetable({ timetable, onBack, originCrumbs = [] }) {
   const [view, setView] = useState('student')
+
+  const crumbs = [
+    ...originCrumbs,
+    { label: 'Timetables', onClick: onBack },
+    { label: `${timetable.label} · ${timetable.semester}` },
+  ]
 
   return (
     <div className="flex h-full flex-col">
+      <Breadcrumbs items={crumbs} className="mb-3" />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <button
