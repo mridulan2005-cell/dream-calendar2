@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -346,8 +346,15 @@ export default function Curriculum() {
   // A running log of edits made this session — each save appends one entry.
   // Newest first, so the dock reads most-recent → oldest left to right.
   const [history, setHistory] = useState([])
-  // A submitted proposal opened from the history tray, shown in a detail panel.
-  const [openProposal, setOpenProposal] = useState(null)
+  // The action-history tray opens into ONE shared side panel listing every entry
+  // newest → oldest (version-history style). Clicking any card opens that panel
+  // focused on the clicked entry, rather than spawning a panel per proposal.
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [focusEntry, setFocusEntry] = useState(null)
+  const openHistoryAt = (h) => {
+    setFocusEntry(h.id)
+    setHistoryOpen(true)
+  }
 
   // Everything below is scoped to the selected programme: its meta, year
   // grouping, curriculum versions and enrolled batches.
@@ -412,6 +419,8 @@ export default function Curriculum() {
       const stamp = Date.now()
       const items = changes.map((c, i) => ({
         id: `${stamp}-${i}-${c.id}`,
+        kind: 'action',
+        ts: stamp,
         batchId: batch?.id,
         batchLabel: batch?.admitYear ?? v.label,
         semN,
@@ -490,17 +499,23 @@ export default function Curriculum() {
   }
 
   return (
-    <div className={`mx-auto max-w-7xl ${history.length ? 'pb-32' : 'pb-12'}`}>
+    <div
+      className={`mx-auto max-w-7xl transition-[padding] ${history.length ? 'pb-32' : 'pb-12'} ${
+        historyOpen ? 'lg:pr-80' : ''
+      }`}
+    >
+     <div className="flex gap-6">
+      <div className="min-w-0 flex-1">
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+          <div className="text-badge uppercase tracking-[0.14em] text-slate-400">
             {proposing ? 'Knowledge Layer · Proposing a change' : 'Knowledge Layer'}
           </div>
-          <h1 className="mt-1 text-2xl font-bold">
+          <h1 className="text-h1 mt-1.5 text-slate-900 dark:text-white">
             {proposing ? 'Propose a curriculum change' : 'Programme Curriculum'}
           </h1>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          <p className="text-body1-regular mt-1.5 text-slate-500 dark:text-slate-400">
             {proposing
               ? 'Pick a programme and batch, edit any semester — your changes collect on the right.'
               : `${programMeta.label} · ${programMeta.durationLabel} · ${programMeta.totalCredits} credits`}
@@ -594,18 +609,70 @@ export default function Curriculum() {
         )}
       </div>
 
+      </div>
+      {historyOpen && (
+        <HistoryPanel
+          history={history}
+          focusId={focusEntry}
+          onJump={(h) => {
+            setHistoryOpen(false)
+            jumpToSem(h)
+          }}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
+     </div>
+
       <VersionHistoryBar
         history={history}
-        onJump={jumpToSem}
-        onOpenProposal={setOpenProposal}
+        onOpen={openHistoryAt}
         onClear={() => setHistory([])}
+        rightInset={historyOpen ? 320 : 0}
       />
-      {openProposal && (
-        <ProposalDetailPanel proposal={openProposal} onClose={() => setOpenProposal(null)} />
-      )}
     </div>
   )
 }
+
+// Minimal, locale-aware date for the compact action-history cards in the bar.
+const fmtDay = (ts) =>
+  ts ? new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : ''
+
+const DAY_MS = 86400000
+// "2 days ago" for recent entries, an absolute "June 5, 3:29 PM" for older ones —
+// the way a document's version history reads.
+function relTime(ts) {
+  if (!ts) return ''
+  const min = Math.floor((Date.now() - ts) / 60000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min} minute${min === 1 ? '' : 's'} ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr} hour${hr === 1 ? '' : 's'} ago`
+  const day = Math.floor(hr / 24)
+  if (day < 7) return `${day} day${day === 1 ? '' : 's'} ago`
+  const d = new Date(ts)
+  const opts = { month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric'
+  return d.toLocaleString(undefined, opts)
+}
+// The version-history bucket an entry falls in: Today / Yesterday / This week /
+// This month, then the month (with year, if past) for older entries.
+function periodOf(ts) {
+  const now = new Date()
+  const d = new Date(ts)
+  const sod = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const today = sod(now)
+  const t = sod(d)
+  if (t === today) return 'Today'
+  if (t === today - DAY_MS) return 'Yesterday'
+  if (t > today - 7 * DAY_MS) return 'This week'
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) return 'This month'
+  const opts = { month: 'long' }
+  if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric'
+  return d.toLocaleString(undefined, opts)
+}
+// One-word change verb (image-1 style), and a short status ("Pending review" → "Pending").
+const TYPE_WORD = { added: 'Addition', removed: 'Removal', modified: 'Change' }
+const shortStatus = (s) => (s ? s.replace(/\s*review$/i, '') : s)
 
 // ── Action-history bar ───────────────────────────────────────────────────────
 // A docked bar that is part of the viewport, pinned to the very bottom and
@@ -614,7 +681,7 @@ export default function Curriculum() {
 // it stays correct when the sidebar collapses. Every edit appends minimal change
 // cards — newest first (leftmost) — chained left by a light arrow, each clickable
 // to jump back to the semester it touched. Layout references the second image.
-function VersionHistoryBar({ history, onJump, onOpenProposal, onClear }) {
+function VersionHistoryBar({ history, onOpen, onClear, rightInset = 0 }) {
   // Track the main content area's left/width so the bar spans exactly it.
   // Guard against no-op updates: returning the previous state when the measured
   // box is unchanged lets React bail out, which prevents a ResizeObserver →
@@ -643,22 +710,22 @@ function VersionHistoryBar({ history, onJump, onOpenProposal, onClear }) {
 
   return createPortal(
     <div
-      style={{ left: box.left, width: box.width }}
+      style={{ left: box.left, width: Math.max(0, box.width - rightInset) }}
       className="fixed bottom-0 z-40 border-t border-slate-200 bg-white shadow-[0_-4px_16px_-8px_rgba(0,0,0,0.15)] dark:border-slate-800 dark:bg-slate-900"
     >
       <div className="flex items-center gap-4 px-6 py-2.5">
         <div className="flex shrink-0 items-center gap-2 text-slate-500 dark:text-slate-400">
           <History size={15} />
-          <span className="text-[11px] font-semibold uppercase tracking-wide">Action history</span>
+          <span className="text-badge uppercase tracking-wide">Action history</span>
         </div>
         <div className="thin-scroll flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
           {history.map((h, i) => (
             <div key={h.id} className="flex shrink-0 items-center gap-1.5">
               {i > 0 && <ArrowLeft size={14} className="shrink-0 text-slate-300 dark:text-slate-600" />}
               {h.kind === 'proposal' ? (
-                <ProposalCard h={h} onClick={() => onOpenProposal(h)} />
+                <ProposalCard h={h} onClick={() => onOpen(h)} />
               ) : (
-                <ActionCard h={h} onClick={() => onJump(h)} />
+                <ActionCard h={h} onClick={() => onOpen(h)} />
               )}
             </div>
           ))}
@@ -701,6 +768,7 @@ function ActionCard({ h, onClick }) {
       <div className="text-[10px] text-slate-400">
         Sem {h.semN} · <span className={`font-medium ${tone}`}>{h.label}</span>
       </div>
+      {h.ts && <div className="text-[10px] text-slate-400">{fmtDay(h.ts)}</div>}
     </button>
   )
 }
@@ -728,124 +796,150 @@ function ProposalCard({ h, onClick }) {
       <div className="truncate text-[10px] text-slate-400">
         {scope} · {count} change{count === 1 ? '' : 's'}
       </div>
-      <div className="truncate text-[10px] text-slate-400">by {h.proposedBy}</div>
+      <div className="flex items-center justify-between gap-2 text-[10px] text-slate-400">
+        <span className="truncate">by {h.proposedBy}</span>
+        {h.ts && <span className="shrink-0">{fmtDay(h.ts)}</span>}
+      </div>
     </button>
   )
 }
 
-// ── Proposal detail panel — opened from a proposal card in the history tray ──
-// A clean right-side drawer: what was proposed (the change list) and why (the
-// reason), with the meta and review status. Read-only — no fills beyond the
-// per-change colour that carries meaning.
-const PROPOSAL_TYPE_LABEL = { added: 'Added', removed: 'Removed', modified: 'Changed' }
-function ProposalDetailPanel({ proposal, onClose }) {
+// ── History panel — one shared, full-height column for the whole history ─────
+// Opened from any card in the action-history bar. Not an overlay and not a
+// bounded card: a clean, minimal column flush to the right edge that runs the
+// full height of the viewport, while the page reflows to make room. Entries read
+// like a document's version history: bucketed by period (Today / This month / …).
+// The clicked entry is scrolled into view and softly outlined.
+function HistoryPanel({ history, focusId, onJump, onClose }) {
   useEffect(() => {
     const onKey = (e) => e.key === 'Escape' && onClose()
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const changes = proposal.changes || []
-  const scope = proposal.batchLabels?.length
-    ? `Batch ${proposal.batchLabels.join(', ')}`
-    : proposal.programmeLabel
-  const when = new Date(proposal.ts).toLocaleDateString(undefined, {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
+  // Group rows under period headers (newest first; history is already ordered).
+  const rows = []
+  let last = null
+  history.forEach((h, i) => {
+    const p = periodOf(h.ts)
+    if (p !== last) {
+      rows.push(
+        <div
+          key={`p-${i}`}
+          className="text-body1-medium px-1 pb-1.5 pt-4 text-slate-500 first:pt-1 dark:text-slate-400"
+        >
+          {p}
+        </div>,
+      )
+      last = p
+    }
+    rows.push(
+      <div key={h.id} className="pb-2">
+        <HistoryEntry h={h} focused={h.id === focusId} onJump={onJump} />
+      </div>,
+    )
   })
 
-  return createPortal(
-    <div className="fixed inset-0 z-[70] flex justify-end" onMouseDown={onClose}>
-      <div className="absolute inset-0 bg-slate-900/20 backdrop-blur-[1px]" />
-      <aside
-        onMouseDown={(e) => e.stopPropagation()}
-        className="relative flex h-full w-[24rem] max-w-[90vw] flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900"
-      >
-        <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">
-              <FilePlus2 size={14} className="shrink-0 text-accent" /> Change proposal
-            </div>
-            <div className="mt-1 truncate text-xs text-slate-400">
-              {proposal.programmeLabel} · {scope}
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
-          >
-            <X size={16} />
-          </button>
-        </header>
+  return (
+    <aside className="fixed inset-y-0 right-0 z-50 hidden w-80 flex-col border-l border-slate-200 bg-surface dark:border-slate-800 dark:bg-slate-900 lg:flex">
+      <header className="flex items-center justify-between gap-3 px-5 py-4">
+        <div className="flex items-center gap-1.5 text-h3-medium text-slate-800 dark:text-slate-100">
+          <History size={16} className="shrink-0 text-slate-400" /> History
+          <span className="text-body2-regular tabular-nums text-slate-400">{history.length}</span>
+        </div>
+        <button
+          onClick={onClose}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+        >
+          <X size={16} />
+        </button>
+      </header>
+      <div className="thin-scroll flex-1 overflow-y-auto px-4 pb-24">
+        {history.length === 0 ? (
+          <div className="px-2 py-10 text-center text-xs text-slate-400">No actions yet.</div>
+        ) : (
+          rows
+        )}
+      </div>
+    </aside>
+  )
+}
 
-        <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-3 text-xs text-slate-500 dark:border-slate-800 dark:text-slate-400">
-          <span className="flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
-            <Clock3 size={10} /> {proposal.status}
+// One history card: a relative time, a status, and the change(s) it concerns,
+// then the reason and who. Every change is listed in full — "CODE | Sem N —
+// Removal" — one row per change, identically whether there's one or many (no
+// "N changes" summary). Low chrome, low cognitive load.
+function ChangeLine({ c }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-body1-medium min-w-0 truncate text-slate-900 dark:text-white">
+        {c.code || c.name} | Sem {c.semN}
+      </span>
+      <span className={`text-body1-medium shrink-0 ${CHANGE_TONE[c.type] || CHANGE_TONE.modified}`}>
+        {TYPE_WORD[c.type] || 'Change'}
+      </span>
+    </div>
+  )
+}
+function HistoryEntry({ h, focused, onJump }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    if (focused) ref.current?.scrollIntoView({ block: 'nearest' })
+  }, [focused])
+
+  const card = `rounded-xl border bg-white p-3 shadow-sm transition dark:bg-slate-900 ${
+    focused ? 'border-accent ring-1 ring-accent/30' : 'border-slate-200 dark:border-slate-800'
+  }`
+
+  if (h.kind === 'proposal') {
+    const changes = h.changes || []
+    return (
+      <div ref={ref} className={card}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-1.5 text-body1-regular text-slate-500 dark:text-slate-400">
+            <Clock3 size={14} className="shrink-0" /> <span className="truncate">{relTime(h.ts)}</span>
           </span>
-          <span className="truncate">by {proposal.proposedBy}</span>
-          <span className="ml-auto shrink-0 text-slate-400">{when}</span>
+          {h.status && (
+            <span className="text-badge shrink-0 rounded-full bg-amber-100 px-2.5 py-0.5 font-medium text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
+              {shortStatus(h.status)}
+            </span>
+          )}
         </div>
-
-        <div className="thin-scroll flex-1 overflow-y-auto px-5 py-4">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Reason</div>
-          <p className="mt-1.5 whitespace-pre-wrap text-sm text-slate-700 dark:text-slate-200">
-            {proposal.reason || <span className="text-slate-400">No reason given.</span>}
-          </p>
-
-          <div className="mt-5 flex items-center justify-between">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-              Changes requested
-            </div>
-            <span className="tabular-nums text-xs font-medium text-slate-400">{changes.length}</span>
+        {changes.length > 0 && (
+          <div className="mt-2 space-y-1">
+            {changes.map((c, i) => (
+              <ChangeLine key={i} c={c} />
+            ))}
           </div>
-          <div className="mt-2 space-y-1.5">
-            {changes.length === 0 ? (
-              <div className="py-6 text-center text-xs text-slate-400">No changes recorded.</div>
-            ) : (
-              changes.map((c, i) => {
-                const removed = c.type === 'removed'
-                const tone = CHANGE_TONE[c.type] || CHANGE_TONE.modified
-                return (
-                  <div
-                    key={i}
-                    className="flex items-start gap-2.5 rounded-lg border border-slate-100 px-3 py-2 dark:border-slate-800"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline gap-1.5">
-                        {c.code && (
-                          <span
-                            className={`shrink-0 text-[11px] font-semibold ${
-                              removed ? 'text-red-400 line-through dark:text-red-400/70' : 'text-slate-400'
-                            }`}
-                          >
-                            {c.code}
-                          </span>
-                        )}
-                        <span
-                          className={`truncate text-[13px] ${
-                            removed
-                              ? 'text-red-400 line-through dark:text-red-400/70'
-                              : 'text-slate-700 dark:text-slate-200'
-                          }`}
-                        >
-                          {c.name || c.code}
-                        </span>
-                      </div>
-                      <div className="mt-0.5 text-[11px] text-slate-400">Sem {c.semN}</div>
-                    </div>
-                    <span className={`shrink-0 text-[10px] font-bold ${tone}`}>
-                      {PROPOSAL_TYPE_LABEL[c.type] || 'Changed'}
-                    </span>
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </div>
-      </aside>
-    </div>,
-    document.body,
+        )}
+        {h.reason && (
+          <p className="text-body1-regular mt-2 line-clamp-2 text-slate-500 dark:text-slate-400">{h.reason}</p>
+        )}
+        <div className="text-body2-regular mt-2 text-slate-400">{h.proposedBy}</div>
+      </div>
+    )
+  }
+
+  // A single edit (e.g. a revert from "View changes") — same card, no proposal meta.
+  return (
+    <div ref={ref} className={card}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex min-w-0 items-center gap-1.5 text-body1-regular text-slate-500 dark:text-slate-400">
+          <Clock3 size={14} className="shrink-0" /> <span className="truncate">{relTime(h.ts)}</span>
+        </span>
+        <span className={`text-body1-medium shrink-0 ${CHANGE_TONE[h.type] || CHANGE_TONE.modified}`}>
+          {TYPE_WORD[h.type] || 'Change'}
+        </span>
+      </div>
+      <button
+        onClick={() => onJump?.(h)}
+        title="Jump to this semester"
+        className="text-body1-medium mt-2 block w-full truncate text-left text-slate-900 transition hover:text-accent dark:text-white"
+      >
+        {h.code || h.name} | Sem {h.semN}
+      </button>
+      <div className="text-body2-regular mt-1 text-slate-400">Batch {h.batchLabel}</div>
+    </div>
   )
 }
 
@@ -976,8 +1070,8 @@ function ExpandedView({ batches, versions, years, perspective, onSaveSem, hideRe
           return (
             <section key={b.id} id={`batch-${b.id}`} className="scroll-mt-6">
               <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2 dark:border-slate-800">
-                <h2 className="text-lg font-bold text-slate-900 dark:text-white">Batch {b.admitYear}</h2>
-                <span className="text-xs text-slate-400">{standingLabel(b, version)}</span>
+                <h2 className="text-h2-bold text-slate-900 dark:text-white">Batch {b.admitYear}</h2>
+                <span className="text-body1-regular text-slate-400">{standingLabel(b, version)}</span>
                 {!hideReview && changes.length > 0 && (
                   <button
                     onClick={() => setChangesBatchId(reviewing ? null : b.id)}
@@ -1147,8 +1241,10 @@ function ExpandedSemCard({ batch, version, versions, years, semester: s, perspec
   const id = `sem-${batch.id}-${s.n}`
   const diff = reviewing ? diffSem(version, versions, s.n) : null
   const base = reviewing ? baseOf(version, versions)?.semesters.find((x) => x.n === s.n) : null
-  // Finished semesters are locked — their curriculum is history and can't be edited.
-  const editable = canEdit && status !== 'done'
+  // Editing is only offered inside the propose-change flow (`live`): the read view
+  // has no Edit affordance until a coordinator starts proposing. Finished
+  // semesters stay locked regardless.
+  const editable = canEdit && live && status !== 'done'
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(() => deepClone(s.entries))
 
@@ -1173,10 +1269,6 @@ function ExpandedSemCard({ batch, version, versions, years, semester: s, perspec
     setDraft(deepClone(s.entries))
     setEditing(true)
   }
-  const save = () => {
-    onSaveSem(version.id, s.n, draft)
-    setEditing(false)
-  }
   const semChanges = diff?.changes || 0
 
   return (
@@ -1191,7 +1283,7 @@ function ExpandedSemCard({ batch, version, versions, years, semester: s, perspec
       }`}
     >
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <h3 className="text-base font-bold text-slate-900 dark:text-white">Semester {s.n}</h3>
+        <h3 className="text-h3-bold text-slate-900 dark:text-white">Semester {s.n}</h3>
         <StatusPill status={status} />
         <span className="text-xs text-slate-400">{yearOfSem(years, s.n)}</span>
         {!editing && reviewing && semChanges > 0 && (
@@ -1234,35 +1326,16 @@ function ExpandedSemCard({ batch, version, versions, years, semester: s, perspec
         <>
           <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
             <Pencil size={13} className="shrink-0" />{' '}
-            {live
-              ? 'Editing live — every change appears in the proposal on the right. Undo any change there.'
-              : `Editing ${version.label} — changes apply to every batch on this version.`}
+            Editing live — every change appears in the proposal on the right. Undo any change there.
           </div>
-          <SemEditView draft={draft} setDraft={live ? applyDraft : setDraft} />
+          <SemEditView draft={draft} setDraft={applyDraft} />
           <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-            {live ? (
-              <button
-                onClick={() => setEditing(false)}
-                className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-white transition hover:brightness-95"
-              >
-                <Check size={15} /> Done
-              </button>
-            ) : (
-              <>
-                <button
-                  onClick={() => setEditing(false)}
-                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={save}
-                  className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-white transition hover:brightness-95"
-                >
-                  <Check size={15} /> Save changes
-                </button>
-              </>
-            )}
+            <button
+              onClick={() => setEditing(false)}
+              className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              Done
+            </button>
           </div>
         </>
       ) : diff && base ? (

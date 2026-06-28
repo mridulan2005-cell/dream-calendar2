@@ -46,7 +46,7 @@ export default function Sidebar() {
 
   if (collapsed) {
     return (
-      <aside className="flex w-16 shrink-0 flex-col items-center border-r border-slate-200 bg-slate-50 py-6 dark:border-slate-800 dark:bg-slate-900">
+      <aside className="flex w-16 shrink-0 flex-col items-center border-r border-slate-200 bg-surface py-6 dark:border-slate-800 dark:bg-slate-900">
         <button
           onClick={toggle}
           title="Expand navigation"
@@ -90,7 +90,7 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-slate-200 bg-slate-50 px-4 py-6 dark:border-slate-800 dark:bg-slate-900">
+    <aside className="flex w-72 shrink-0 flex-col border-r border-slate-200 bg-surface px-4 py-6 dark:border-slate-800 dark:bg-slate-900">
       <div className="mb-8 flex items-center justify-between px-3">
         <span className="text-xl font-semibold text-slate-800 dark:text-slate-100">
           IITB Experience

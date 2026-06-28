@@ -3,7 +3,31 @@
 @tailwind utilities;
 
 :root {
-  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: 'Satoshi', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  /* Design-system surfaces */
+  --color-canvas: #f5f9f8; /* primary background */
+  --color-surface: #ffffff; /* secondary background — headers, side panels */
+
+  /* Typography tokens (from the uploaded design system) */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+
+  --text-h1-size: 32px;
+  --text-h1-line-height: 110%;
+  --text-badge-size: 12px;
+  --text-badge-line-height: 110%;
+  --text-h2-size: 24px;
+  --text-h2-line-height: 120%;
+  --text-h3-size: 16px;
+  --text-h3-line-height: 120%;
+  --text-body1-size: 12px;
+  --text-body1-line-height: 130%;
+  --text-body2-size: 10px;
+  --text-body2-line-height: 130%;
+  --text-body3-size: 8px;
+  --text-body3-line-height: 130%;
 }
 
 html,
@@ -14,6 +38,64 @@ body,
 
 body {
   margin: 0;
+  background: var(--color-canvas);
+}
+
+/* ── Typography utility classes (uploaded design system) ───────────────────── */
+.text-h1 {
+  font-size: var(--text-h1-size);
+  line-height: var(--text-h1-line-height);
+  font-weight: var(--font-weight-regular);
+}
+.text-badge {
+  font-size: var(--text-badge-size);
+  line-height: var(--text-badge-line-height);
+  font-weight: var(--font-weight-regular);
+}
+.text-h2-medium {
+  font-size: var(--text-h2-size);
+  line-height: var(--text-h2-line-height);
+  font-weight: var(--font-weight-medium);
+}
+.text-h2-bold {
+  font-size: var(--text-h2-size);
+  line-height: var(--text-h2-line-height);
+  font-weight: var(--font-weight-bold);
+}
+.text-h3-regular {
+  font-size: var(--text-h3-size);
+  line-height: var(--text-h3-line-height);
+  font-weight: var(--font-weight-regular);
+}
+.text-h3-medium {
+  font-size: var(--text-h3-size);
+  line-height: var(--text-h3-line-height);
+  font-weight: var(--font-weight-medium);
+}
+.text-h3-bold {
+  font-size: var(--text-h3-size);
+  line-height: var(--text-h3-line-height);
+  font-weight: var(--font-weight-bold);
+}
+.text-body1-regular {
+  font-size: var(--text-body1-size);
+  line-height: var(--text-body1-line-height);
+  font-weight: var(--font-weight-regular);
+}
+.text-body1-medium {
+  font-size: var(--text-body1-size);
+  line-height: var(--text-body1-line-height);
+  font-weight: var(--font-weight-medium);
+}
+.text-body2-regular {
+  font-size: var(--text-body2-size);
+  line-height: var(--text-body2-line-height);
+  font-weight: var(--font-weight-regular);
+}
+.text-body3-regular {
+  font-size: var(--text-body3-size);
+  line-height: var(--text-body3-line-height);
+  font-weight: var(--font-weight-regular);
 }
 
 /* Thin scrollbars for the horizontal change-request carousel and grid */
