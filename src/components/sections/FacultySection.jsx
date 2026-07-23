@@ -6,6 +6,8 @@ import { matchesFilter, progress } from '../../logic/timetable.js'
 import CourseFilters from '../CourseFilters.jsx'
 import FacultyLoadPanel from '../FacultyLoadPanel.jsx'
 import SectionHeader from './SectionHeader.jsx'
+import StepShell from './StepShell.jsx'
+import AeroSection from './AeroSection.jsx'
 import MarkDoneButton from './MarkDoneButton.jsx'
 import StatusFilter from './StatusFilter.jsx'
 
@@ -13,7 +15,7 @@ import StatusFilter from './StatusFilter.jsx'
 // shows who taught it last year (carried-over reference). A "Faculty load" panel
 // opens alongside (not as a separate tab) so total teaching load is visible
 // while assigning — no context switch.
-export default function FacultySection() {
+export default function FacultySection({ nav, scope, setScope }) {
   const { courses, updateCourse, workflow, setStepDone } = useApp()
   const [filter, setFilter] = useState({ program: '', sub: '', query: '' })
   const [status, setStatus] = useState('all') // all | allotted | unallotted
@@ -41,9 +43,18 @@ export default function FacultySection() {
 
   const setFaculty = (course, next) => updateCourse({ ...course, faculty: next })
 
+  // Read-only aero (B.Tech) view — placed after all hooks for stable hook order.
+  if (scope?.departmentId && scope.departmentId !== 'idc') {
+    return <AeroSection mode="faculty" nav={nav} scope={scope} setScope={setScope} />
+  }
+
   return (
-    <div className="mx-auto max-w-7xl">
-      <SectionHeader
+    <StepShell
+      nav={nav}
+      scope={scope}
+      setScope={setScope}
+      header={
+        <SectionHeader
         eyebrow={`Department Timetable ${TERM.semester} 2026-27`}
         title="Faculty Allotment"
         action={
@@ -63,8 +74,10 @@ export default function FacultySection() {
             />
           </div>
         }
-      />
-
+        />
+      }
+    >
+      <div className="mx-auto max-w-7xl">
       <div className="mt-5 flex items-start gap-6">
         <div className="min-w-0 flex-1">
           <CourseFilters
@@ -147,7 +160,8 @@ export default function FacultySection() {
           <FacultyLoadPanel onClose={() => setLoadOpen(false)} highlightFaculty={hovered} />
         )}
       </div>
-    </div>
+      </div>
+    </StepShell>
   )
 }
 

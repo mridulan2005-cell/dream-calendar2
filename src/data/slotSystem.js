@@ -83,6 +83,93 @@ export const cloneSlotSystem = (sys = DEFAULT_SLOT_SYSTEM) => ({
   M: sys.M.map((s) => ({ ...s, composedOf: s.composedOf ? [...s.composedOf] : undefined })),
 })
 
+// The slot vocabulary a department (B.Tech) actually allots in, derived straight
+// from the institute slot system so it stays in lockstep with it — edit the slot
+// system and this updates everywhere it's read (the allotment dropdown, the
+// weekly grid, the course panel).
+//
+//   lectures — the S periods that share a slot NUMBER are one lecture slot: 1A
+//              (Mon), 1B (Tue), 1C (Thu) are the three meetings of lecture slot
+//              "1". A 6-credit course sits at one such slot and meets at each of
+//              its periods. X-overflow periods (no number) stand alone.
+//   labs     — the L slots (one 3-hour afternoon block each): L1, L2, … LX.
+//   modules  — the M studio blocks (MA, MB), IDC's own system, listed for
+//              completeness.
+export function departmentSlots(system = DEFAULT_SLOT_SYSTEM) {
+  const S = system?.S || SLOT_S
+  const L = system?.L || SLOT_L
+  const M = system?.M || SLOT_M
+
+  // Each institute S-period is its OWN lecture slot — 1A (Mon), 1B (Tue) and 1C
+  // (Thu) are three separate slots, not one grouped "1A · 1B · 1C" entry. Ordered
+  // by slot number then period letter so the dropdown reads 1A, 1B, 1C, 2A, …
+  const lectures = [...S]
+    .sort((a, b) => {
+      const na = Number(a.id.match(/^(\d+)/)?.[1] ?? Infinity)
+      const nb = Number(b.id.match(/^(\d+)/)?.[1] ?? Infinity)
+      return na - nb || a.id.localeCompare(b.id)
+    })
+    .map((s) => ({
+      id: s.id,
+      kind: 'lecture',
+      system: 'S',
+      code: s.id,
+      days: [s.day],
+      start: s.start,
+      end: s.end,
+      blocks: [{ day: s.day, start: s.start, end: s.end, code: s.id }],
+    }))
+  // Legacy grouped lecture slots (id "S1" = the periods 1A·1B·1C) are no longer
+  // offered for allotment, but stay resolvable so any course previously allotted
+  // to a whole group still renders on the grid and master timetable.
+  const legacyGroups = (() => {
+    const groups = new Map()
+    for (const s of S) {
+      const key = s.id.match(/^(\d+)/)?.[1] || s.id
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push(s)
+    }
+    return [...groups.values()].map((members) => ({
+      id: `S${members[0].id.match(/^(\d+)/)?.[1] || members[0].id}`,
+      kind: 'lecture',
+      system: 'S',
+      code: members.map((m) => m.id).join(' · '),
+      days: [...new Set(members.map((m) => m.day))],
+      start: members[0].start,
+      end: members[0].end,
+      blocks: members.map((m) => ({ day: m.day, start: m.start, end: m.end, code: m.id })),
+    }))
+  })()
+  const labs = L.map((l) => ({
+    id: l.id,
+    kind: 'lab',
+    system: 'L',
+    code: l.id,
+    days: [l.day],
+    start: l.start,
+    end: l.end,
+    blocks: [{ day: l.day, start: l.start, end: l.end, code: l.id }],
+  }))
+  const seenM = new Set()
+  const modules = []
+  for (const m of M) {
+    if (seenM.has(m.id)) continue
+    seenM.add(m.id)
+    const mine = M.filter((x) => x.id === m.id)
+    modules.push({
+      id: m.id,
+      kind: 'module',
+      system: 'M',
+      code: m.id,
+      days: mine.map((x) => x.day),
+      start: m.start,
+      end: m.end,
+      blocks: mine.map((x) => ({ day: x.day, start: x.start, end: x.end, code: x.id })),
+    })
+  }
+  return { lectures, labs, modules, all: [...lectures, ...labs, ...modules] }
+}
+
 export const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
 
 // Canonical teaching-period columns for the weekly grid. LUNCH is a narrow

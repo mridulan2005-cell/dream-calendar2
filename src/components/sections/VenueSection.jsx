@@ -3,15 +3,21 @@ import { ChevronDown, MapPin, Search } from 'lucide-react'
 import { useApp } from '../../store/AppContext.jsx'
 import { TERM, PREV_YEAR, venues as allVenues } from '../../data/seed.js'
 import { progress } from '../../logic/timetable.js'
+import { FACULTY_IDENTITY } from '../../store/RoleContext.jsx'
 import BatchTabs from '../BatchTabs.jsx'
+import MyCoursesToggle from '../MyCoursesToggle.jsx'
 import SectionHeader from './SectionHeader.jsx'
+import StepShell from './StepShell.jsx'
+import AeroSection from './AeroSection.jsx'
 import MarkDoneButton from './MarkDoneButton.jsx'
 import StatusFilter from './StatusFilter.jsx'
 
 // Step 4 — venue allotment, as cards consistent with the faculty/slot lists. The
 // right of each card shows the room the course used last year as a reference.
-export default function VenueSection() {
+export default function VenueSection({ nav, scope, setScope, role = 'ttc' }) {
   const { courses, updateCourse, workflow, setStepDone, selectedCourseId, setSelectedCourse } = useApp()
+  const isFaculty = role === 'faculty'
+  const [ownScope, setOwnScope] = useState('mine') // faculty: 'mine' | 'all'
   const [cohortTags, setCohortTags] = useState([]) // empty = show all batches
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all') // all | allotted | unallotted
@@ -34,19 +40,29 @@ export default function VenueSection() {
     () =>
       courses.filter(
         (c) =>
+          (!isFaculty || ownScope === 'all' || c.faculty.includes(FACULTY_IDENTITY.key)) &&
           (cohortTags.length === 0 || cohortTags.includes(c.cohort)) &&
           (!q || c.code.toLowerCase().includes(q) || c.title.toLowerCase().includes(q)),
       ),
-    [courses, cohortTags, q],
+    [courses, isFaculty, ownScope, cohortTags, q],
   )
   const allottedCount = list.filter(isAllotted).length
   const counts = { all: list.length, allotted: allottedCount, unallotted: list.length - allottedCount }
   const shown =
     status === 'all' ? list : list.filter((c) => (status === 'allotted' ? isAllotted(c) : !isAllotted(c)))
 
+  // Read-only aero (B.Tech) view — placed after all hooks for stable hook order.
+  if (scope?.departmentId && scope.departmentId !== 'idc') {
+    return <AeroSection mode="venue" nav={nav} scope={scope} setScope={setScope} />
+  }
+
   return (
-    <div className="mx-auto max-w-6xl">
-      <SectionHeader
+    <StepShell
+      nav={nav}
+      scope={scope}
+      setScope={setScope}
+      header={
+        <SectionHeader
         eyebrow={`Department Timetable ${TERM.semester} 2026-27`}
         title="Venue Allotment"
         action={
@@ -66,9 +82,12 @@ export default function VenueSection() {
             />
           </div>
         }
-      />
-
+        />
+      }
+    >
+      <div className="mx-auto max-w-6xl">
       <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-3">
+        {isFaculty && <MyCoursesToggle value={ownScope} onChange={setOwnScope} />}
         <BatchTabs value={cohortTags} onChange={setCohortTags} />
         <div className="ml-auto flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 dark:border-slate-700 dark:bg-slate-900">
           <Search size={15} className="text-slate-400" />
@@ -158,6 +177,7 @@ export default function VenueSection() {
           </p>
         )}
       </div>
-    </div>
+      </div>
+    </StepShell>
   )
 }

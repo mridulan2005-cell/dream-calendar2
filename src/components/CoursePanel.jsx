@@ -172,7 +172,7 @@ export default function CoursePanel({
   const shell =
     variant === 'inset'
       ? 'sticky top-0 flex max-h-[calc(100vh-4rem)] w-[380px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'
-      : 'sticky top-0 flex h-screen w-[380px] shrink-0 flex-col border-l border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'
+      : 'flex h-full min-h-0 w-[380px] shrink-0 flex-col border-l border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'
 
   // Render a field as a hover-to-edit row, or its inline editor when active.
   const field = (key, label, display, editor) =>

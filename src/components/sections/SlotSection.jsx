@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, CircleAlert, Grid3x3, Search } from 'lucide-react'
 import { useApp } from '../../store/AppContext.jsx'
-import { TERM, PREV_YEAR, slotLabel, slotSystems, facultyPreferences } from '../../data/seed.js'
+import { TERM, PREV_YEAR, slotLabel, slotSystems, facultyPreferences, cohorts } from '../../data/seed.js'
+import { FACULTY_IDENTITY } from '../../store/RoleContext.jsx'
 import { progress, pastSlotSystem } from '../../logic/timetable.js'
 import SlotPicker from '../SlotPicker.jsx'
 import BatchTabs from '../BatchTabs.jsx'
+import MyCoursesToggle from '../MyCoursesToggle.jsx'
 import SectionHeader from './SectionHeader.jsx'
+import StepShell from './StepShell.jsx'
+import AeroSection from './AeroSection.jsx'
 import MarkDoneButton from './MarkDoneButton.jsx'
 import StatusFilter from './StatusFilter.jsx'
 
@@ -15,7 +19,7 @@ import StatusFilter from './StatusFilter.jsx'
 // SYSTEM it ran in last year and any faculty availability preferences; a
 // slotting-type selector reveals the week picker (and a "Grid" button that opens
 // the batch's week grid in a state-synced tab).
-export default function SlotSection() {
+export default function SlotSection({ nav, scope, setScope, role = 'ttc' }) {
   const {
     courses,
     workflow,
@@ -26,6 +30,11 @@ export default function SlotSection() {
     setSelectedCourses,
     updateCourse,
   } = useApp()
+  // A faculty member views this surface to set their own slotting preferences —
+  // the list defaults to their courses, and the slotting control reads as a
+  // preference rather than a definitive allotment.
+  const isFaculty = role === 'faculty'
+  const [ownScope, setOwnScope] = useState('mine') // faculty: 'mine' | 'all'
   const [filterBy, setFilterBy] = useState('batch') // 'batch' | 'faculty'
   const [cohortTags, setCohortTags] = useState([]) // empty = show all batches
   const [facultyTags, setFacultyTags] = useState([]) // empty = show all faculty
@@ -49,16 +58,19 @@ export default function SlotSection() {
   const list = useMemo(
     () =>
       courses.filter((c) => {
+        const matchesOwn =
+          !isFaculty || ownScope === 'all' || c.faculty.includes(FACULTY_IDENTITY.key)
         const matchesChips =
           filterBy === 'batch'
             ? cohortTags.length === 0 || cohortTags.includes(c.cohort)
             : facultyTags.length === 0 || c.faculty.some((f) => facultyTags.includes(f))
         return (
+          matchesOwn &&
           matchesChips &&
           (!q || c.code.toLowerCase().includes(q) || c.title.toLowerCase().includes(q))
         )
       }),
-    [courses, filterBy, cohortTags, facultyTags, q],
+    [courses, isFaculty, ownScope, filterBy, cohortTags, facultyTags, q],
   )
   const allottedCount = list.filter(isAllotted).length
   const counts = { all: list.length, allotted: allottedCount, unallotted: list.length - allottedCount }
@@ -107,16 +119,18 @@ export default function SlotSection() {
     }
   }
 
+  // Read-only aero (B.Tech) view — placed after all hooks for stable hook order.
+  if (scope?.departmentId && scope.departmentId !== 'idc') {
+    return <AeroSection mode="slot" nav={nav} scope={scope} setScope={setScope} />
+  }
+
   return (
-    <div
-      className="mx-auto max-w-7xl"
-      onClick={() => {
-        // Click anywhere that isn't a course card → clear the selection.
-        if (selectedCourseIds.length) setSelectedCourse(null)
-        setLastClicked(null)
-      }}
-    >
-      <SectionHeader
+    <StepShell
+      nav={nav}
+      scope={scope}
+      setScope={setScope}
+      header={
+        <SectionHeader
         eyebrow={`Department Timetable ${TERM.semester} 2026-27`}
         title="Slot Allotment"
         action={
@@ -136,13 +150,24 @@ export default function SlotSection() {
             />
           </div>
         }
-      />
-
+        />
+      }
+    >
+      <div
+        className="mx-auto max-w-7xl"
+        onClick={() => {
+          // Click anywhere that isn't a course card → clear the selection.
+          if (selectedCourseIds.length) setSelectedCourse(null)
+          setLastClicked(null)
+        }}
+      >
       <div className="mt-5 flex items-start gap-6">
         {/* Left: filters + course cards */}
         <div className="min-w-0 flex-1">
           {/* Batch / faculty toggle + matching filter chips + search */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
+            {/* Faculty: scope the list to their own courses or the whole dept. */}
+            {isFaculty && <MyCoursesToggle value={ownScope} onChange={setOwnScope} />}
             <div className="flex shrink-0 rounded-lg bg-slate-100 p-0.5 dark:bg-slate-800">
               {[
                 { id: 'batch', label: 'By batch' },
@@ -171,14 +196,34 @@ export default function SlotSection() {
                 allLabel="All faculty"
               />
             )}
-            <div className="ml-auto flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 dark:border-slate-700 dark:bg-slate-900">
-              <Search size={15} className="text-slate-400" />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search for a course code or name"
-                className="w-60 bg-transparent text-sm outline-none placeholder:text-slate-400"
-              />
+            <div className="ml-auto flex items-center gap-2">
+              <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 dark:border-slate-700 dark:bg-slate-900">
+                <Search size={15} className="text-slate-400" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search for a course code or name"
+                  className="w-60 bg-transparent text-sm outline-none placeholder:text-slate-400"
+                />
+              </div>
+              {/* The week-grid shortcut lives here once — beside the search — for
+                  the whole step, rather than on every course card. It opens the
+                  selected course's batch week (focused on it), or the first
+                  batch's week when nothing is selected. */}
+              <button
+                onClick={() => {
+                  // The grid allots one focus course's weeks — open the selected
+                  // course, or the first course as a populated default.
+                  const sel = courses.find((c) => c.id === selectedCourseId) || courses[0]
+                  if (!sel) return
+                  const qs = new URLSearchParams({ cohort: sel.cohort || cohorts[0], focus: sel.id, system: 'M' })
+                  window.open(`/slot-grid?${qs.toString()}`, '_blank')
+                }}
+                title="Open the week grid in a new tab — edits sync live"
+                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+              >
+                <Grid3x3 size={15} /> Grid
+              </button>
             </div>
           </div>
 
@@ -245,7 +290,7 @@ export default function SlotSection() {
                     <div className="flex flex-[2] items-start gap-3" onClick={(e) => e.stopPropagation()}>
                       <div>
                         <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                          Slotting type
+                          {isFaculty ? 'Slotting preference' : 'Slotting type'}
                         </div>
                         <div className="relative inline-block">
                           <select
@@ -264,7 +309,7 @@ export default function SlotSection() {
                               sys ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'
                             }`}
                           >
-                            <option value="">Select slot system</option>
+                            <option value="">{isFaculty ? 'Select preferred system' : 'Select slot system'}</option>
                             {slotSystems.map((s) => (
                               <option key={s.id} value={s.id} title={s.timing}>
                                 Slot System {s.id}
@@ -286,20 +331,6 @@ export default function SlotSection() {
                       {isM && (
                         <div className="flex items-end gap-2">
                           <SlotPicker course={c} />
-                          <button
-                            onClick={() =>
-                              window.open(
-                                `/slot-grid?cohort=${encodeURIComponent(c.cohort)}&focus=${encodeURIComponent(
-                                  c.id,
-                                )}&system=${sys}`,
-                                '_blank',
-                              )
-                            }
-                            title={`Open the ${c.cohort} week grid in a new tab — edits sync live`}
-                            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
-                          >
-                            <Grid3x3 size={14} /> Grid
-                          </button>
                         </div>
                       )}
                       {sys && !isM && (
@@ -345,6 +376,7 @@ export default function SlotSection() {
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </StepShell>
   )
 }

@@ -5,6 +5,7 @@ import {
   sharedAccess as seedShared,
   weeklyElectives as seedWeeklyElectives,
 } from '../data/seed.js'
+import { aeroCourses as seedAeroCourses } from '../data/aeroTimetable.js'
 import { SEED_CURRICULUM } from '../data/curriculum.js'
 import { DEFAULT_SLOT_SYSTEM, cloneSlotSystem } from '../data/slotSystem.js'
 import { applyOp, detectConflicts, clashKey } from '../logic/timetable.js'
@@ -43,6 +44,18 @@ const initialState = {
   })),
   changeRequests: seedRequests,
   sharedAccess: seedShared,
+  // The Aerospace (B.Tech) department's own editable courses. It reads through
+  // the SAME planner steps as IDC — faculty / slot / venue are all allottable —
+  // so it lives in the store just like the IDC courses, with last year's values
+  // carried as the on-screen reference. Seeded from the published curriculum.
+  aeroCourses: seedAeroCourses.map((c) => ({
+    ...c,
+    faculty: [...c.faculty],
+    slots: [...c.slots],
+    prevSlots: [...c.slots],
+    prevVenue: c.venue,
+    prevFaculty: [...c.faculty],
+  })),
   // Weekly electives likewise carry over to the slots where they ran last year.
   weeklyElectives: seedWeeklyElectives.map((e) => ({
     ...e,
@@ -139,6 +152,14 @@ function baseReducer(state, action) {
         c.id === action.course.id ? action.course : c,
       )
       return { ...state, courses }
+    }
+    // Allot faculty / slot / venue on one Aerospace course. Mirrors UPDATE_COURSE
+    // but on the department's own slice.
+    case 'UPDATE_AERO_COURSE': {
+      const aeroCourses = state.aeroCourses.map((c) =>
+        c.id === action.course.id ? action.course : c,
+      )
+      return { ...state, aeroCourses }
     }
     // Batch update (e.g. a drag that moves/swaps several courses at once).
     case 'UPDATE_COURSES': {
@@ -416,6 +437,7 @@ export function AppProvider({ children }) {
       // action creators
       updateCourse: (course) => dispatch({ type: 'UPDATE_COURSE', course }),
       updateCourses: (courses) => dispatch({ type: 'UPDATE_COURSES', courses }),
+      updateAeroCourse: (course) => dispatch({ type: 'UPDATE_AERO_COURSE', course }),
       updateWeeklyElective: (elective) => dispatch({ type: 'UPDATE_WEEKLY_ELECTIVE', elective }),
       finaliseCourses: () => dispatch({ type: 'FINALISE_COURSES' }),
       setStepDone: (step, value) => dispatch({ type: 'SET_STEP_DONE', step, value }),

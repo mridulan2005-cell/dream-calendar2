@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  font-family: 'Satoshi', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 
   /* Design-system surfaces */
   --color-canvas: #f5f9f8; /* primary background */
@@ -14,8 +14,8 @@
   --font-weight-medium: 500;
   --font-weight-bold: 700;
 
-  --text-h1-size: 32px;
-  --text-h1-line-height: 110%;
+  --text-h1-size: 26px;
+  --text-h1-line-height: 115%;
   --text-badge-size: 12px;
   --text-badge-line-height: 110%;
   --text-h2-size: 24px;
@@ -98,14 +98,85 @@ body {
   font-weight: var(--font-weight-regular);
 }
 
-/* Thin scrollbars for the horizontal change-request carousel and grid */
-.thin-scroll::-webkit-scrollbar {
-  height: 8px;
-  width: 8px;
+/* Scrollbars are hidden app-wide — every region still scrolls (wheel, trackpad,
+   drag, keyboard), it just doesn't paint a bar. `.thin-scroll` is kept as a
+   no-op class name so existing markup needn't change. */
+* {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
 }
-.thin-scroll::-webkit-scrollbar-thumb {
-  background: rgba(120, 120, 140, 0.4);
-  border-radius: 999px;
+*::-webkit-scrollbar,
+.thin-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none; /* Chrome / Safari / Edge */
+}
+
+/* Dual-handle credit range slider (course-discovery panel). Two native range
+   inputs are stacked; only their thumbs take pointer events so each handle is
+   grabbable, and the coloured fill between them is drawn behind. */
+.credit-range {
+  -webkit-appearance: none;
+  appearance: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  pointer-events: none;
+}
+.credit-range::-webkit-slider-runnable-track,
+.credit-range::-moz-range-track {
+  background: transparent;
+  border: none;
+}
+.credit-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  width: 14px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 2px solid #019487; /* accent */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.credit-range::-moz-range-thumb {
+  height: 14px;
+  width: 14px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 2px solid #019487; /* accent */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+/* Examination weeks in the B.Tech semester grid. A soft diagonal hatch reads as
+   "the term is paused here" — structurally different from a course block, without
+   the alarm of the red clash styling. */
+.exam-band {
+  background-color: #fdf6ec;
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(180, 130, 40, 0.12) 0,
+    rgba(180, 130, 40, 0.12) 1px,
+    transparent 1px,
+    transparent 7px
+  );
+}
+:is(.dark .exam-band) {
+  background-color: rgba(69, 45, 8, 0.35);
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(251, 191, 36, 0.12) 0,
+    rgba(251, 191, 36, 0.12) 1px,
+    transparent 1px,
+    transparent 7px
+  );
 }
 
 /* Toast entrance: slide up from below + fade in */

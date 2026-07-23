@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import {
   GraduationCap,
@@ -15,7 +14,6 @@ import {
   GitCompare,
   RotateCcw,
   History,
-  ArrowLeft,
   CalendarRange,
   FilePlus2,
   Send,
@@ -29,6 +27,10 @@ const deepClone = (x) => JSON.parse(JSON.stringify(x))
 // The signed-in coordinator — stamped onto a proposal so the action history
 // records who proposed a change. (Prototype: a single known user.)
 const CURRENT_USER = '24b3629@iitb.ac.in'
+
+// Persist the action history so it stays put across navigation (cleared only by
+// the explicit "Clear" control in the bar).
+const HISTORY_KEY = 'iitb-curriculum-history'
 
 // Carry the youngest batch's curriculum forward into a fresh, not-yet-published
 // version for the next incoming batch, and enrol that batch — returning a NEW
@@ -343,9 +345,24 @@ export default function Curriculum() {
   const [proposalBaseline, setProposalBaseline] = useState(null)
   const [preProposal, setPreProposal] = useState(null)
   const [proposalReason, setProposalReason] = useState('')
-  // A running log of edits made this session — each save appends one entry.
-  // Newest first, so the dock reads most-recent → oldest left to right.
-  const [history, setHistory] = useState([])
+  // A running log of edits — each save appends one entry. Newest first, so the
+  // bar reads most-recent → oldest left to right. Persisted to localStorage so it
+  // survives navigating away and back (it only clears when the user clears it).
+  const [history, setHistory] = useState(() => {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY)
+      return raw ? JSON.parse(raw) : []
+    } catch {
+      return []
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history))
+    } catch {
+      /* storage may be unavailable — non-fatal */
+    }
+  }, [history])
   // The action-history tray opens into ONE shared side panel listing every entry
   // newest → oldest (version-history style). Clicking any card opens that panel
   // focused on the clicked entry, rather than spawning a panel per proposal.
@@ -500,9 +517,7 @@ export default function Curriculum() {
 
   return (
     <div
-      className={`mx-auto max-w-7xl transition-[padding] ${history.length ? 'pb-32' : 'pb-12'} ${
-        historyOpen ? 'lg:pr-80' : ''
-      }`}
+      className={`mx-auto max-w-7xl pb-12 transition-[padding] ${historyOpen ? 'lg:pr-80' : ''}`}
     >
      <div className="flex gap-6">
       <div className="min-w-0 flex-1">
@@ -623,12 +638,7 @@ export default function Curriculum() {
       )}
      </div>
 
-      <VersionHistoryBar
-        history={history}
-        onOpen={openHistoryAt}
-        onClear={() => setHistory([])}
-        rightInset={historyOpen ? 320 : 0}
-      />
+      <VersionHistoryBar history={history} onOpen={openHistoryAt} onClear={() => setHistory([])} />
     </div>
   )
 }
@@ -675,60 +685,29 @@ const TYPE_WORD = { added: 'Addition', removed: 'Removal', modified: 'Change' }
 const shortStatus = (s) => (s ? s.replace(/\s*review$/i, '') : s)
 
 // ── Action-history bar ───────────────────────────────────────────────────────
-// A docked bar that is part of the viewport, pinned to the very bottom and
-// stretching the full width of the main content area (not a floating overlay).
-// It's portaled to <body> and positioned to track the <main> element's box, so
-// it stays correct when the sidebar collapses. Every edit appends minimal change
-// cards — newest first (leftmost) — chained left by a light arrow, each clickable
-// to jump back to the semester it touched. Layout references the second image.
-function VersionHistoryBar({ history, onOpen, onClear, rightInset = 0 }) {
-  // Track the main content area's left/width so the bar spans exactly it.
-  // Guard against no-op updates: returning the previous state when the measured
-  // box is unchanged lets React bail out, which prevents a ResizeObserver →
-  // setState → re-measure feedback loop.
-  const [box, setBox] = useState(null)
-  useEffect(() => {
-    const main = document.querySelector('main')
-    if (!main) return
-    const measure = () => {
-      const r = main.getBoundingClientRect()
-      const left = Math.round(r.left)
-      const width = Math.round(r.width)
-      setBox((prev) => (prev && prev.left === left && prev.width === width ? prev : { left, width }))
-    }
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(main)
-    window.addEventListener('resize', measure)
-    return () => {
-      ro.disconnect()
-      window.removeEventListener('resize', measure)
-    }
-  }, [])
+// A clean, minimal bar that stays stuck to the bottom of the viewport as the page
+// scrolls (sticky, not a floating overlay — no shadow, just a hairline divider and
+// a solid background). Negative margins let it span the full scroll area and sit
+// flush against the bottom edge. Each edit appends one card, newest first; click a
+// card to jump back to the semester it touched. "Clear" empties the history.
+function VersionHistoryBar({ history, onOpen, onClear }) {
+  if (!history.length) return null
 
-  if (!history.length || !box) return null
-
-  return createPortal(
-    <div
-      style={{ left: box.left, width: Math.max(0, box.width - rightInset) }}
-      className="fixed bottom-0 z-40 border-t border-slate-200 bg-white shadow-[0_-4px_16px_-8px_rgba(0,0,0,0.15)] dark:border-slate-800 dark:bg-slate-900"
-    >
-      <div className="flex items-center gap-4 px-6 py-2.5">
-        <div className="flex shrink-0 items-center gap-2 text-slate-500 dark:text-slate-400">
-          <History size={15} />
-          <span className="text-badge uppercase tracking-wide">Action history</span>
+  return (
+    <div className="sticky -bottom-7 z-30 -mx-8 -mb-7 mt-6 border-t border-slate-200 bg-surface dark:border-slate-800 dark:bg-slate-900">
+      <div className="mx-auto flex max-w-7xl items-center gap-3 px-8 py-2.5">
+        <div className="flex shrink-0 items-center gap-2 text-slate-400 dark:text-slate-500">
+          <History size={14} />
+          <span className="text-badge uppercase tracking-wide">History</span>
         </div>
-        <div className="thin-scroll flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
-          {history.map((h, i) => (
-            <div key={h.id} className="flex shrink-0 items-center gap-1.5">
-              {i > 0 && <ArrowLeft size={14} className="shrink-0 text-slate-300 dark:text-slate-600" />}
-              {h.kind === 'proposal' ? (
-                <ProposalCard h={h} onClick={() => onOpen(h)} />
-              ) : (
-                <ActionCard h={h} onClick={() => onOpen(h)} />
-              )}
-            </div>
-          ))}
+        <div className="thin-scroll flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+          {history.map((h) =>
+            h.kind === 'proposal' ? (
+              <ProposalCard key={h.id} h={h} onClick={() => onOpen(h)} />
+            ) : (
+              <ActionCard key={h.id} h={h} onClick={() => onOpen(h)} />
+            ),
+          )}
         </div>
         <button
           onClick={onClear}
@@ -737,8 +716,7 @@ function VersionHistoryBar({ history, onOpen, onClear, rightInset = 0 }) {
           Clear
         </button>
       </div>
-    </div>,
-    document.body,
+    </div>
   )
 }
 
@@ -841,7 +819,7 @@ function HistoryPanel({ history, focusId, onJump, onClose }) {
   })
 
   return (
-    <aside className="fixed inset-y-0 right-0 z-50 hidden w-80 flex-col border-l border-slate-200 bg-surface dark:border-slate-800 dark:bg-slate-900 lg:flex">
+    <aside className="fixed bottom-0 right-0 top-16 z-50 hidden w-80 flex-col border-l border-slate-200 bg-surface dark:border-slate-800 dark:bg-slate-900 lg:flex">
       <header className="flex items-center justify-between gap-3 px-5 py-4">
         <div className="flex items-center gap-1.5 text-h3-medium text-slate-800 dark:text-slate-100">
           <History size={16} className="shrink-0 text-slate-400" /> History
@@ -1261,8 +1239,8 @@ function ExpandedSemCard({ batch, version, versions, years, semester: s, perspec
   // timetable for it — carrying a breadcrumb so the timetable can come back here.
   const term = termOfSem(batch.admitYear, s.n)
   const goToTimetable = () =>
-    navigate(`/timetables?year=${term.year}&semester=${term.semester}`, {
-      state: { crumbs: [{ label: 'Programme Curriculum', to: '/curriculum' }] },
+    navigate(`/faculty/timetable?year=${term.year}&semester=${term.semester}`, {
+      state: { crumbs: [{ label: 'Programme Curriculum', to: '/faculty/curriculum' }] },
     })
 
   const startEdit = () => {
@@ -1341,7 +1319,7 @@ function ExpandedSemCard({ batch, version, versions, years, semester: s, perspec
       ) : diff && base ? (
         <SemDiffView sem={s} base={base} diff={diff} />
       ) : (
-        <SemReadView sem={s} batch={batch} perspective={perspective} status={status} flat />
+        <SemReadView sem={s} batch={batch} perspective={perspective} status={status} />
       )}
     </div>
   )
@@ -1559,18 +1537,165 @@ function ChangeRow({ c, unread, onRevert, onJump }) {
   )
 }
 
-// ── Read-only semester detail (with diff highlighting vs. the base batch) ────
-const DIFF_BG = {
-  added: 'bg-green-50/70 ring-1 ring-green-200 dark:bg-green-950/20 dark:ring-green-900/50',
-  modified: 'bg-amber-50/70 ring-1 ring-amber-200 dark:bg-amber-950/20 dark:ring-amber-900/50',
+// ── Curriculum tables (IIT Bombay table guidelines) ─────────────────────────
+// Course listings are laid out as real tables: a light header band with a
+// rounded top, hairline row separators (no vertical rules), consistent row
+// heights and generous spacing. Columns are sized by how much information they
+// carry — the Course cell takes the width and groups the course name (primary)
+// with its code + category nested beneath as supporting metadata, kept distinct
+// by weight rather than borders. Numbers (credits) sit right-aligned; text
+// wraps and nothing ever scrolls sideways.
+const ALIGN = { left: 'text-left', right: 'text-right', center: 'text-center' }
+// Subtle whole-row tint for a diffed row (selection/diff states are a soft tint,
+// never a hard fill).
+const DIFF_ROW = {
+  added: 'bg-green-50/60 dark:bg-green-950/20',
+  modified: 'bg-amber-50/50 dark:bg-amber-950/20',
+  removed: 'bg-red-50/50 dark:bg-red-950/20',
 }
-function SemReadView({ sem, batch, perspective, status, diff, flat = false }) {
+const CREDITS_COL = { key: 'credits', label: 'Credits', align: 'right', thClass: 'w-20' }
+
+function CourseTable({ label, columns, children }) {
+  return (
+    <div>
+      {label && <SectionLabel>{label}</SectionLabel>}
+      <div className="mt-1.5 overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+        <table className="w-full table-fixed">
+          <thead>
+            <tr className="bg-slate-50 dark:bg-slate-800/40">
+              {columns.map((c) => (
+                <th
+                  key={c.key}
+                  className={`px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400 ${ALIGN[c.align]} ${c.thClass || ''}`}
+                >
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">{children}</tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// The grouped, primary cell of every course row: course name on top (largest
+// weight), code + category nested beneath as supporting metadata. A removed
+// course reads struck-through; an added one carries slightly heavier weight.
+function CourseCell({ name, meta, status }) {
+  const removed = status === 'removed'
+  const added = status === 'added'
+  return (
+    <td className="px-3 py-3 align-top">
+      <div className="flex items-baseline gap-2">
+        <span
+          className={`min-w-0 text-sm ${
+            removed
+              ? 'text-red-400 line-through dark:text-red-400/70'
+              : 'text-slate-900 dark:text-white'
+          } ${added ? 'font-semibold' : 'font-medium'}`}
+        >
+          {name}
+        </span>
+        <DiffLabel status={status} />
+      </div>
+      {meta && (
+        <div
+          className={`mt-0.5 text-[11px] ${
+            removed ? 'text-red-300 line-through dark:text-red-400/50' : 'text-slate-400'
+          }`}
+        >
+          {meta}
+        </div>
+      )}
+    </td>
+  )
+}
+
+// Right-aligned credits cell — the number in tabular figures, "cr" quiet beside it.
+function CreditsCell({ credits, removed = false }) {
+  return (
+    <td className="px-3 py-3 text-right align-top">
+      <span
+        className={`text-sm font-semibold tabular-nums ${
+          removed ? 'text-red-300 line-through dark:text-red-400/50' : 'text-slate-700 dark:text-slate-200'
+        }`}
+      >
+        {credits}
+      </span>
+      <span className="ml-0.5 text-[11px] text-slate-400">cr</span>
+    </td>
+  )
+}
+
+// A change's state shown as a plain semantic-colour label (not a pill) — the
+// guideline treatment once a status sits inside a grouped cell.
+function DiffLabel({ status }) {
+  if (!status || status === 'same') return null
+  const map = {
+    added: { t: 'New', c: 'text-green-600 dark:text-green-400' },
+    modified: { t: 'Changed', c: 'text-amber-600 dark:text-amber-400' },
+    removed: { t: 'Removed', c: 'text-red-500 dark:text-red-400' },
+  }
+  const s = map[status]
+  if (!s) return null
+  return <span className={`shrink-0 text-[11px] font-semibold ${s.c}`}>{s.t}</span>
+}
+
+// A fixed course row (core / project) — grouped course cell, L–T–P structure
+// (hover explains it), right-aligned credits.
+function CourseTr({ entry: e, status }) {
+  const meta = `${e.code}${e.kind === 'project' ? ' · Project' : ' · Core course'}`
+  const struct = e.l || e.t || e.st ? `${e.l ?? 0}-${e.t ?? 0}-${e.st ?? 0}` : '—'
+  return (
+    <tr className={status ? DIFF_ROW[status] || '' : ''}>
+      <CourseCell name={e.name} meta={meta} status={status} />
+      <td
+        className="hidden px-3 py-3 align-top sm:table-cell"
+        title="Lecture – Tutorial – Practical hours per week"
+      >
+        <span className="text-xs tabular-nums text-slate-500 dark:text-slate-400">{struct}</span>
+      </td>
+      <CreditsCell credits={e.credits} removed={status === 'removed'} />
+    </tr>
+  )
+}
+
+// An open-elective slot — no fixed L–T–P, an optional note as the metadata line.
+function ElectiveTr({ entry: e, status }) {
+  return (
+    <tr className={status ? DIFF_ROW[status] || '' : ''}>
+      <CourseCell name={e.title} meta={e.note || 'Open elective · choose any'} status={status} />
+      <CreditsCell credits={e.credits} removed={status === 'removed'} />
+    </tr>
+  )
+}
+
+// Non-credit mandatory requirements — a quiet footer beneath the tables.
+function MandatoryFooter({ items, done = false }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((e, i) => (
+        <span
+          key={`${e.code}-${i}`}
+          className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+        >
+          {done ? <Check size={10} className="text-green-600 dark:text-green-400" /> : <Lock size={10} />}{' '}
+          {e.code} · {e.name} (non-credit)
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function SemReadView({ sem, batch, perspective, status, diff }) {
   // A student looking at a semester they've finished or are doing sees their own
   // enrolment — the courses they actually took, with grades once it's done —
   // not the full catalogue of electives. Upcoming sems fall through to the
   // standard catalogue view below.
   if (perspective === 'student' && (status === 'done' || status === 'current'))
-    return <StudentSemView sem={sem} batch={batch} status={status} flat={flat} />
+    return <StudentSemView sem={sem} batch={batch} status={status} />
 
   const cores = sem.entries.filter((e) => e.kind === 'core' || e.kind === 'project')
   const baskets = sem.entries.filter((e) => e.kind === 'basket')
@@ -1587,14 +1712,18 @@ function SemReadView({ sem, batch, perspective, status, diff, flat = false }) {
       )}
 
       {cores.length > 0 && (
-        <div>
-          <SectionLabel>Core courses</SectionLabel>
-          <div className="mt-1.5 space-y-1">
-            {cores.map((e, i) => (
-              <CoreRow key={`${e.code}-${i}`} e={e} st={statusOf(e)} flat={flat} />
-            ))}
-          </div>
-        </div>
+        <CourseTable
+          label="Core courses"
+          columns={[
+            { key: 'course', label: 'Course', align: 'left' },
+            { key: 'struct', label: 'L–T–P', align: 'left', thClass: 'hidden w-24 sm:table-cell' },
+            CREDITS_COL,
+          ]}
+        >
+          {cores.map((e, i) => (
+            <CourseTr key={`${e.code}-${i}`} entry={e} status={statusOf(e)} />
+          ))}
+        </CourseTable>
       )}
 
       {baskets.map((e, i) => (
@@ -1602,61 +1731,37 @@ function SemReadView({ sem, batch, perspective, status, diff, flat = false }) {
       ))}
 
       {electives.length > 0 && (
-        <div>
-          <SectionLabel>Open electives</SectionLabel>
-          <div className="mt-1.5 space-y-1.5">
-            {electives.map((e, i) => {
-              const st = statusOf(e)
-              return (
-                <div
-                  key={`${e.title}-${i}`}
-                  className={`flex items-center justify-between rounded-lg border border-dashed border-slate-200 px-3 py-2 dark:border-slate-700 ${st ? DIFF_BG[st] || '' : ''}`}
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="truncate text-sm font-medium text-slate-700 dark:text-slate-200">{e.title}</span>
-                      <DiffTag status={st} />
-                    </div>
-                    {e.note && <div className="text-[11px] text-slate-400">{e.note}</div>}
-                  </div>
-                  <CreditTag credits={e.credits} flat={flat} />
-                </div>
-              )
-            })}
-          </div>
-        </div>
+        <CourseTable
+          label="Open electives"
+          columns={[
+            { key: 'course', label: 'Elective slot', align: 'left' },
+            CREDITS_COL,
+          ]}
+        >
+          {electives.map((e, i) => (
+            <ElectiveTr key={`${e.title}-${i}`} entry={e} status={statusOf(e)} />
+          ))}
+        </CourseTable>
       )}
 
-      {mandatory.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {mandatory.map((e, i) => (
-            <span
-              key={`${e.code}-${i}`}
-              className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-            >
-              <Lock size={10} /> {e.code} · {e.name} (non-credit)
-            </span>
-          ))}
-        </div>
-      )}
+      {mandatory.length > 0 && <MandatoryFooter items={mandatory} />}
 
       {/* Entries that the base batch had but this one dropped. */}
       {diff?.removed?.length > 0 && (
-        <div>
-          <SectionLabel>Removed from {diff.baseLabel}</SectionLabel>
-          <div className="mt-1.5 space-y-1">
-            {diff.removed.map((e, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-2 rounded-lg bg-red-50/60 px-3 py-1.5 text-xs text-red-400 line-through dark:bg-red-950/20 dark:text-red-400/70"
-              >
-                <span className="w-16 shrink-0 font-semibold">{e.code || ''}</span>
-                <span className="min-w-0 flex-1 truncate">{e.name || e.title}</span>
-                <DiffTag status="removed" />
-              </div>
-            ))}
-          </div>
-        </div>
+        <CourseTable
+          label={`Removed from ${diff.baseLabel}`}
+          columns={[
+            { key: 'course', label: 'Course', align: 'left' },
+            CREDITS_COL,
+          ]}
+        >
+          {diff.removed.map((e, i) => (
+            <tr key={i} className={DIFF_ROW.removed}>
+              <CourseCell name={e.name || e.title} meta={e.code || undefined} status="removed" />
+              <CreditsCell credits={e.credits} removed />
+            </tr>
+          ))}
+        </CourseTable>
       )}
     </div>
   )
@@ -1666,7 +1771,7 @@ function SemReadView({ sem, batch, perspective, status, diff, flat = false }) {
 // A transcript-style read of one semester from the student's own perspective.
 // Done semesters carry letter grades and an SPI; the current semester reads
 // "in progress". Mandatory (non-credit) requirements sit in a quiet footer.
-function StudentSemView({ sem, batch, status, flat = false }) {
+function StudentSemView({ sem, batch, status }) {
   const done = status === 'done'
   const courses = studentCourses(sem, batch)
   const mandatory = sem.entries.filter((e) => e.kind === 'mandatory')
@@ -1689,124 +1794,71 @@ function StudentSemView({ sem, batch, status, flat = false }) {
         </div>
       )}
 
-      <div>
-        <SectionLabel>{done ? 'Courses & grades' : 'Enrolled courses'}</SectionLabel>
-        <div className="mt-1.5 space-y-1">
-          {courses.map((c, i) => (
-            <div
-              key={`${c.code}-${i}`}
-              className="flex items-center gap-3 rounded-md px-2 py-1.5"
-            >
-              <span className="w-16 shrink-0 text-xs font-bold text-slate-400">{c.code}</span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm text-slate-700 dark:text-slate-200">{c.name}</span>
-                {c.from && (
-                  <span className="text-[10px] uppercase tracking-wide text-slate-400">{c.from}</span>
-                )}
-              </span>
+      <CourseTable
+        label={done ? 'Courses & grades' : 'Enrolled courses'}
+        columns={[
+          { key: 'course', label: 'Course', align: 'left' },
+          done
+            ? { key: 'grade', label: 'Grade', align: 'center', thClass: 'w-20' }
+            : { key: 'state', label: 'Status', align: 'center', thClass: 'w-24' },
+          CREDITS_COL,
+        ]}
+      >
+        {courses.map((c, i) => (
+          <tr key={`${c.code}-${i}`}>
+            <CourseCell name={c.name} meta={c.from ? `${c.code} · ${c.from}` : c.code} />
+            <td className="px-3 py-3 text-center align-top">
               {done ? (
-                <GradeTag grade={mockGrade(batch.id, sem.n, c.code)} flat={flat} />
+                <span className="text-sm font-medium tabular-nums text-slate-600 dark:text-slate-300">
+                  {mockGrade(batch.id, sem.n, c.code)}
+                </span>
               ) : (
-                <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                  ongoing
+                <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                  Ongoing
                 </span>
               )}
-              <CreditTag credits={c.credits} flat={flat} />
-            </div>
-          ))}
-        </div>
-      </div>
+            </td>
+            <CreditsCell credits={c.credits} />
+          </tr>
+        ))}
+      </CourseTable>
 
-      {mandatory.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {mandatory.map((e, i) => (
-            <span
-              key={`${e.code}-${i}`}
-              className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-            >
-              {done ? <Check size={10} className="text-green-600 dark:text-green-400" /> : <Lock size={10} />}{' '}
-              {e.code} · {e.name} (non-credit)
-            </span>
-          ))}
-        </div>
-      )}
+      {mandatory.length > 0 && <MandatoryFooter items={mandatory} done={done} />}
     </div>
   )
 }
 
-// Letter-grade badge — quiet and neutral (no tier colour), so the transcript
-// reads calmly rather than as a graded report card. `flat` renders it as light,
-// unboxed text — for the scannable expanded view.
-function GradeTag({ grade, flat = false }) {
-  if (flat)
-    return (
-      <span className="w-8 shrink-0 text-right text-sm font-medium tabular-nums text-slate-500 dark:text-slate-400">
-        {grade}
-      </span>
-    )
-  return (
-    <span className="shrink-0 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-      {grade}
-    </span>
-  )
-}
-
-function CoreRow({ e, st, flat = false }) {
-  return (
-    <div className={`flex items-center gap-3 rounded-md px-2 py-1.5 ${st ? DIFF_BG[st] || '' : ''}`}>
-      <span className="w-16 shrink-0 text-xs font-bold text-slate-400">{e.code}</span>
-      <span className="min-w-0 flex-1 truncate text-sm text-slate-700 dark:text-slate-200">{e.name}</span>
-      <DiffTag status={st} />
-      {e.kind === 'core' && (e.l || e.t || e.st) ? (
-        <span className="hidden shrink-0 text-[10px] text-slate-400 sm:inline">
-          {e.l}-{e.t}-{e.st}
-        </span>
-      ) : null}
-      <CreditTag credits={e.credits} flat={flat} />
-    </div>
-  )
-}
-
+// A shared elective basket — a grouped block: the basket title (primary) with a
+// plain teal "Pick N" state label in the header band, its options nested beneath
+// as rows (name primary, code metadata, credits right-aligned).
 function BasketBlock({ e, st }) {
   return (
-    <div className={`rounded-xl border border-slate-200 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-800/30 ${st ? DIFF_BG[st] || '' : ''}`}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">
-          {e.title}
-          <DiffTag status={st} />
+    <div
+      className={`overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 ${st ? DIFF_ROW[st] || '' : ''}`}
+    >
+      <div className="flex items-center justify-between gap-2 bg-slate-50 px-3 py-2 dark:bg-slate-800/40">
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate text-sm font-semibold text-slate-900 dark:text-white">{e.title}</span>
+          <DiffLabel status={st} />
         </span>
-        <span className="shrink-0 rounded-md bg-accent-soft px-2 py-0.5 text-[10px] font-semibold text-accent dark:bg-slate-700 dark:text-slate-200">
-          pick {e.pick} · {e.credits} cr
+        <span className="shrink-0 text-[11px] font-semibold text-accent">
+          Pick {e.pick} · {e.credits} cr each
         </span>
       </div>
-      <div className="mt-2 space-y-1">
-        {e.options.map((o, i) => (
-          <div key={`${o.code}-${i}`} className="flex items-center gap-2 text-xs">
-            <span className="w-16 shrink-0 font-semibold text-slate-400">{o.code}</span>
-            <span className="min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300">{o.name}</span>
-            <span className="shrink-0 text-slate-400">{o.credits} cr</span>
-          </div>
-        ))}
-      </div>
+      <table className="w-full table-fixed">
+        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+          {e.options.map((o, i) => (
+            <tr key={`${o.code}-${i}`}>
+              <td className="px-3 py-2.5 align-top">
+                <div className="text-sm text-slate-800 dark:text-slate-200">{o.name}</div>
+                <div className="mt-0.5 text-[11px] text-slate-400">{o.code}</div>
+              </td>
+              <CreditsCell credits={o.credits} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
-  )
-}
-
-// Added / Changed / Removed pill used in the diff view.
-function DiffTag({ status, count }) {
-  if (!status || status === 'same') return null
-  const map = {
-    added: { label: 'New', cls: 'bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300' },
-    modified: { label: 'Changed', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' },
-    removed: { label: 'Removed', cls: 'bg-red-100 text-red-600 dark:bg-red-950/50 dark:text-red-300' },
-  }
-  const s = map[status]
-  if (!s) return null
-  return (
-    <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase ${s.cls}`}>
-      {count != null ? `${count} ` : ''}
-      {s.label}
-    </span>
   )
 }
 

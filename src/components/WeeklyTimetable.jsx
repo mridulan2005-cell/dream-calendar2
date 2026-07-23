@@ -1,8 +1,10 @@
 import { useState, useMemo, useEffect } from 'react'
-import { MapPin, ChevronDown, AlertTriangle, X, Layers, Check, Clock } from 'lucide-react'
+import { MapPin, ChevronDown, AlertTriangle, X, Layers, Check, Clock, Ban, Plus } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
 import { slots as allSlots, cohorts } from '../data/seed.js'
 import { DAYS, PERIODS, mSlotAt, freeSlotsAt, periodLabel } from '../data/slotSystem.js'
+import { catalogueAt } from '../data/catalogue.js'
+import { CellMenu, ReasonPopover } from './AvailabilityMenus.jsx'
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const fmtD = (iso) => {
@@ -19,6 +21,13 @@ const toMin = (t) => {
   return h * 60 + m
 }
 const periodsOverlap = (s1, e1, s2, e2) => toMin(s1) < toMin(e2) && toMin(e1) > toMin(s2)
+
+// A faculty-availability cell key `${day}#${periodId}` → "Mon 9:30–10:25".
+const describeCell = (key) => {
+  const [day, periodId] = key.split('#')
+  const p = PERIODS.find((x) => x.id === periodId)
+  return p ? `${day} ${periodLabel(p.start)}–${periodLabel(p.end)}` : day
+}
 
 // Look up a slot's clock time on a given day from the live institute system.
 const slotTimeOnDay = (system, slotId, day) => {
@@ -48,8 +57,12 @@ const electiveBaseTime = (system, e) => {
   return { start: '09:30', end: '10:55' }
 }
 
-const computeBlocks = (courses, cohort) => {
-  const occupantOf = (wid) => courses.find((c) => c.cohort === cohort && c.slots.includes(wid)) || null
+// `match` selects which courses belong to the entity being shown — a cohort in
+// batch view, or a faculty member in the faculty view. Accepts a predicate, or a
+// cohort name for the legacy callers.
+const computeBlocks = (courses, match) => {
+  const matchFn = typeof match === 'function' ? match : (c) => c.cohort === match
+  const occupantOf = (wid) => courses.find((c) => matchFn(c) && c.slots.includes(wid)) || null
   const out = []
   allSlots.forEach((w, i) => {
     const occ = occupantOf(w.id)
@@ -72,7 +85,51 @@ const computeBlocks = (courses, cohort) => {
 // down the side) and Day-specific (one day, the chosen batches down the side).
 // In batch-specific view you can drag the batch's weekly DE electives onto the
 // slot where they historically ran, or click to select and then click the slot.
-export default function WeeklyTimetable({ focus, courses }) {
+export default function WeeklyTimetable({
+  focus,
+  courses,
+  controlled = false,
+  mode = 'student',
+  selected = null,
+  editable = true,
+  // Faculty-availability wiring (only active on a faculty's own weekly view):
+  selfKey = null,
+  unavailability = {},
+  onMarkUnavailable,
+  onClearUnavailable,
+  onRequestChange,
+  discover = false,
+  pickedCell = null,
+  onPickCell,
+}) {
+  // The Master Timetable drives the weekly view from outside (a Student/Faculty
+  // toggle + a batch/faculty dropdown live in its control bar), so there are no
+  // day-specific sub-view or per-batch chips here — just the chosen entity's week.
+  if (controlled) {
+    return (
+      <ControlledWeekly
+        focus={focus}
+        courses={courses}
+        mode={mode}
+        selected={selected}
+        editable={editable}
+        selfKey={selfKey}
+        unavailability={unavailability}
+        onMarkUnavailable={onMarkUnavailable}
+        onClearUnavailable={onClearUnavailable}
+        onRequestChange={onRequestChange}
+        discover={discover}
+        pickedCell={pickedCell}
+        onPickCell={onPickCell}
+      />
+    )
+  }
+  return <LegacyWeekly focus={focus} courses={courses} />
+}
+
+// The original weekly view with its own Batch / Day sub-view selector and batch
+// chips — still used by the Slot Grid Editor.
+function LegacyWeekly({ focus, courses }) {
   const { updateCourse, slotSystem, weeklyElectives, updateWeeklyElective } = useApp()
   const [subView, setSubView] = useState('batch') // 'batch' | 'day'
   const [shown, setShown] = useState([focus.cohort])
@@ -410,6 +467,430 @@ export default function WeeklyTimetable({ focus, courses }) {
   )
 }
 
+// The Master-Timetable weekly view: one entity (a batch, or a faculty member) at
+// a time, days down the side and periods across the top. The Student/Faculty
+// toggle and the entity dropdown are owned by the parent, so this component just
+// renders the schedule for `selected`. A faculty view (or any non-editable use)
+// is read-only — no elective tray, no drag-to-assign.
+function ControlledWeekly({
+  focus,
+  courses,
+  mode,
+  selected,
+  editable,
+  selfKey = null,
+  unavailability = {},
+  onMarkUnavailable,
+  onClearUnavailable,
+  onRequestChange,
+  // Course discovery (a student planning their term before it starts): every
+  // free cell becomes a way to ask "what could I take here?".
+  discover = false,
+  pickedCell = null,
+  onPickCell,
+}) {
+  const { slotSystem, weeklyElectives, updateWeeklyElective } = useApp()
+  const isFaculty = mode === 'faculty'
+  const sel = selected || (isFaculty ? null : focus?.cohort)
+  const canEdit = editable && !isFaculty
+  // The viewer is looking at their OWN schedule — only then can they select
+  // cells, mark unavailability, or raise a change request from the grid.
+  const isSelf = isFaculty && !!selfKey && sel === selfKey && !!onMarkUnavailable
+
+  const matches = (c) => (isFaculty ? c.faculty?.includes(sel) : c.cohort === sel)
+  const eMatches = (e) => (isFaculty ? e.faculty?.includes(sel) : e.cohort === sel)
+
+  const [dragId, setDragId] = useState(null)
+  const [activeElectiveId, setActiveElectiveId] = useState(null)
+  const [durationEdit, setDurationEdit] = useState(null)
+  const [sel0, setSel0] = useState(0)
+
+  // --- Faculty cell selection + availability (self view only) ---------------
+  // Selected free cells (keys `${day}#${periodId}`), a right-click action menu,
+  // and the reason-entry popover for marking unavailability.
+  const [selectedCells, setSelectedCells] = useState(() => new Set())
+  const [menu, setMenu] = useState(null) // { x, y, cells: string[] }
+  const [reasonEdit, setReasonEdit] = useState(null) // { x, y, cells: string[], value }
+
+  const clearSelection = () => {
+    setSelectedCells((prev) => (prev.size ? new Set() : prev))
+    setMenu(null)
+  }
+  const toggleCell = (key) => {
+    setMenu(null)
+    setSelectedCells((prev) => {
+      const next = new Set(prev)
+      next.has(key) ? next.delete(key) : next.add(key)
+      return next
+    })
+  }
+  const openCellMenu = (key, ev) => {
+    ev.preventDefault()
+    ev.stopPropagation()
+    // Right-clicking a cell outside the current selection makes it the sole
+    // target; right-clicking within a multi-selection keeps the whole set.
+    const cells = selectedCells.has(key) ? [...selectedCells] : [key]
+    if (!selectedCells.has(key)) setSelectedCells(new Set([key]))
+    setMenu({ x: ev.clientX, y: ev.clientY, cells })
+  }
+  // Are every menu-target cell already marked unavailable? (offer "clear")
+  const menuAllUnavailable =
+    menu && menu.cells.length > 0 && menu.cells.every((k) => unavailability[k])
+  const startMarkUnavailable = () => {
+    if (!menu) return
+    const existing = menu.cells.map((k) => unavailability[k]).find(Boolean) || ''
+    setReasonEdit({ x: menu.x, y: menu.y, cells: menu.cells, value: existing })
+    setMenu(null)
+  }
+  const saveReason = () => {
+    if (!reasonEdit) return
+    onMarkUnavailable?.(reasonEdit.cells, reasonEdit.value.trim() || 'Unavailable')
+    setReasonEdit(null)
+    clearSelection()
+  }
+  const clearMenuCells = () => {
+    if (!menu) return
+    onClearUnavailable?.(menu.cells)
+    setMenu(null)
+    clearSelection()
+  }
+  const requestChangeForCells = () => {
+    if (!menu) return
+    const label = menu.cells.map(describeCell).join(', ')
+    onRequestChange?.(
+      `Regarding my weekly schedule — ${label}: `,
+    )
+    setMenu(null)
+    clearSelection()
+  }
+
+  // Dismiss the menu / reason popover / selection on Escape.
+  useEffect(() => {
+    if (!isSelf) return
+    const onKey = (ev) => {
+      if (ev.key !== 'Escape') return
+      if (reasonEdit) setReasonEdit(null)
+      else if (menu) setMenu(null)
+      else clearSelection()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [isSelf, reasonEdit, menu]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset any in-progress selection when the shown entity changes.
+  useEffect(() => {
+    setSelectedCells(new Set())
+    setMenu(null)
+    setReasonEdit(null)
+  }, [sel, isFaculty])
+
+  const blocks = useMemo(() => computeBlocks(courses, matches), [courses, sel, isFaculty])
+  useEffect(() => setSel0(0), [sel, isFaculty])
+  const block = blocks[Math.min(sel0, Math.max(0, blocks.length - 1))]
+  const weekId = block ? block.weeks[0].id : allSlots[0]?.id
+  const studio = courses.find((c) => matches(c) && c.slots.includes(weekId)) || null
+
+  const placedElectives = weeklyElectives.filter((e) => eMatches(e) && e.weeklySlots?.length > 0)
+  const trayElectives = weeklyElectives.filter((e) => eMatches(e))
+
+  const activeId = dragId || activeElectiveId
+  const activeElective = activeId ? weeklyElectives.find((e) => e.id === activeId) : null
+  const optimalSlots = activeElective?.prevWeeklySlots || []
+  const anyActive = !!(dragId || activeElectiveId)
+
+  const assign = () => {
+    const e = weeklyElectives.find((we) => we.id === (dragId || activeElectiveId))
+    if (e && e.prevWeeklySlots?.length > 0) updateWeeklyElective({ ...e, weeklySlots: e.prevWeeklySlots })
+    setDragId(null)
+  }
+  const unassign = (e) => updateWeeklyElective({ ...e, weeklySlots: null })
+  const onEditDuration = (e, ev) => {
+    setActiveElectiveId(null)
+    setDragId(null)
+    setDurationEdit({ id: e.id, x: ev.clientX, y: ev.clientY })
+  }
+  const saveDuration = (id, time) => {
+    const e = weeklyElectives.find((we) => we.id === id)
+    if (e) updateWeeklyElective({ ...e, customTime: time })
+    setDurationEdit(null)
+  }
+  const resetDuration = (id) => {
+    const e = weeklyElectives.find((we) => we.id === id)
+    if (e) updateWeeklyElective({ ...e, customTime: null })
+    setDurationEdit(null)
+  }
+  const clearActive = () => setActiveElectiveId(null)
+  const toggleTraySelection = (id) => {
+    setActiveElectiveId((prev) => (prev === id ? null : id))
+    setDragId(null)
+  }
+
+  const entityLabel = isFaculty ? sel || '—' : `Batch ${sel || '—'}`
+
+  return (
+    <div className="p-6">
+      <div className="flex gap-6">
+        {/* Jump-to-week rail — same design as the Programme Curriculum "Jump to"
+            rail: a bold entity heading over a left-bordered list of weeks, the
+            active week ticked in accent. It steps aside while the discovery
+            panel is open: that panel is about one cell in one week, so jumping
+            to another week mid-choice would only pull the two out of step. */}
+        <nav
+          className={`sticky top-4 h-fit w-44 shrink-0 self-start ${
+            pickedCell ? 'hidden' : 'hidden md:block'
+          }`}
+        >
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Jump to</div>
+          <div className="mt-2">
+            {blocks.length === 0 ? (
+              <div className="border-l border-slate-200 py-1 pl-3 text-xs text-slate-400 dark:border-slate-800">
+                {isFaculty ? 'No weeks taught yet.' : 'No weeks allotted yet.'}
+              </div>
+            ) : (
+              <div className="border-l border-slate-200 dark:border-slate-800">
+                {blocks.map((b, i) => {
+                  const f = b.weeks[0]
+                  const l = b.weeks[b.weeks.length - 1]
+                  const active = i === Math.min(sel0, blocks.length - 1)
+                  const dLabel = `${fmtD(f.dateRange.start)} – ${fmtD(l.dateRange.end)}`
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setSel0(i)}
+                      className={`-ml-px flex w-full items-center border-l-2 py-1 pl-3 text-left text-xs transition ${
+                        active
+                          ? 'border-accent font-semibold text-accent'
+                          : 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      <span className="shrink-0">{dLabel}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </nav>
+
+        {/* Schedule grid — periods across the top, days down the side */}
+        <div
+          className="min-w-0 flex-1 overflow-x-auto"
+          onClick={() => {
+            clearActive()
+            if (isSelf) clearSelection()
+          }}
+        >
+          <div className="mb-3 flex flex-wrap items-baseline gap-2">
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">
+              {block
+                ? `${fmtD(block.weeks[0].dateRange.start)} – ${fmtD(block.weeks[block.weeks.length - 1].dateRange.end)}`
+                : 'Weekly schedule'}
+            </h2>
+            <span className="text-sm text-slate-400">{entityLabel}</span>
+          </div>
+
+          {/* Faculty availability hint — how to use the selectable grid. Turns
+              into a live count once cells are picked. */}
+          {isSelf && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+              {selectedCells.size > 0 ? (
+                <>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 font-semibold text-accent dark:bg-slate-800 dark:text-slate-100">
+                    {selectedCells.size} slot{selectedCells.size > 1 ? 's' : ''} selected
+                  </span>
+                  <span className="text-slate-500 dark:text-slate-400">
+                    Right-click to request a change or mark unavailable
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      clearSelection()
+                    }}
+                    className="ml-1 rounded-md px-2 py-0.5 font-medium text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
+                  >
+                    Clear
+                  </button>
+                </>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                  <Ban size={13} className="text-slate-400" />
+                  Click free slots in your week to select, then right-click to request a change or
+                  mark yourself unavailable.
+                </span>
+              )}
+            </div>
+          )}
+
+          <table className="w-full border-separate border-spacing-0 text-xs">
+            <thead>
+              <tr>
+                <th className="w-20 rounded-tl-lg border border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900">
+                  Day
+                </th>
+                {PERIODS.map((p) =>
+                  p.kind === 'lunch' ? (
+                    <th key={p.id} className="w-6 border-b border-r border-t border-slate-200 bg-slate-50 px-1 py-2 dark:border-slate-700 dark:bg-slate-900">
+                      <span className="block text-[9px] font-semibold uppercase tracking-wide text-slate-400 [writing-mode:vertical-rl]">
+                        Lunch
+                      </span>
+                    </th>
+                  ) : (
+                    <th key={p.id} className="min-w-[96px] border-b border-r border-t border-slate-200 bg-slate-50 px-2 py-2 text-left text-[11px] font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900">
+                      {periodLabel(p.start)} – {periodLabel(p.end)}
+                    </th>
+                  ),
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {DAYS.map((d) => (
+                <tr key={d}>
+                  <th className="border-b border-l border-r border-slate-200 bg-slate-50 px-2 py-2 text-left align-top font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                    {d}
+                  </th>
+                  <PeriodCells
+                    day={d}
+                    system={slotSystem}
+                    course={studio}
+                    electives={placedElectives}
+                    onAssign={canEdit ? assign : undefined}
+                    onUnassign={canEdit ? unassign : undefined}
+                    onEditDuration={canEdit ? onEditDuration : undefined}
+                    dragActive={canEdit && !!dragId}
+                    anyActive={canEdit && anyActive}
+                    optimalSlots={canEdit ? optimalSlots : []}
+                    showFreeSlots={!isSelf}
+                    selfInteractive={isSelf}
+                    selectedCells={selectedCells}
+                    unavailable={unavailability}
+                    onToggleCell={toggleCell}
+                    onCellMenu={openCellMenu}
+                    discover={discover}
+                    pickedCell={pickedCell}
+                    onPickCell={onPickCell}
+                  />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Legend variant={isSelf ? 'faculty' : 'default'} />
+        </div>
+      </div>
+
+      {/* Weekly DE electives tray — editing only (a batch's own electives). */}
+      {canEdit && (
+        <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-slate-900/40">
+          <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            <Layers size={12} /> Weekly electives · {sel}
+            <span className="font-normal normal-case tracking-normal text-slate-400">
+              · click or drag a card, then drop on a highlighted slot · right-click a placed course to set its duration
+            </span>
+          </div>
+          {trayElectives.length === 0 ? (
+            <p className="px-1 py-2 text-xs text-slate-400">No weekly electives for this batch.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2 pb-1">
+              {trayElectives.map((e) => {
+                const placed = e.weeklySlots?.length > 0
+                const isActive = activeElectiveId === e.id
+                const isDragging = dragId === e.id
+                const noSlot = e.prevWeeklySlots.length === 0
+                return (
+                  <div
+                    key={e.id}
+                    draggable={!noSlot}
+                    onClick={(ev) => {
+                      ev.stopPropagation()
+                      if (!noSlot) toggleTraySelection(e.id)
+                    }}
+                    onDragStart={() => {
+                      setDragId(e.id)
+                      setActiveElectiveId(null)
+                    }}
+                    onDragEnd={() => setDragId(null)}
+                    title={
+                      noSlot
+                        ? `${e.schedule} — no standard slot match`
+                        : `Click to select · drag ${e.code} onto a highlighted slot`
+                    }
+                    className={`flex w-44 shrink-0 select-none flex-col rounded-xl border px-3 py-2.5 transition ${
+                      noSlot
+                        ? 'cursor-default border-slate-200 bg-slate-100/60 opacity-60 dark:border-slate-700 dark:bg-slate-800/40'
+                        : isActive || isDragging
+                          ? 'cursor-grab border-accent ring-2 ring-accent/30 dark:border-accent'
+                          : placed
+                            ? 'cursor-grab border-emerald-200 bg-emerald-50/70 dark:border-emerald-900/50 dark:bg-emerald-950/20'
+                            : 'cursor-grab border-slate-200 bg-white hover:border-accent dark:border-slate-700 dark:bg-slate-900'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">
+                        {e.code}
+                      </span>
+                      {placed && <Check size={11} className="shrink-0 text-emerald-600 dark:text-emerald-400" />}
+                    </div>
+                    <div className="mt-0.5 truncate text-[10px] font-medium text-slate-700 dark:text-slate-200">
+                      {e.title}
+                    </div>
+                    <div className="mt-1 truncate text-[10px] text-slate-400">{e.faculty.join(', ') || '—'}</div>
+                    <div className="mt-1 flex items-center gap-1 text-[9px] text-slate-400">
+                      <Clock size={9} className="shrink-0" />
+                      {e.schedule}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {durationEdit &&
+        (() => {
+          const e = weeklyElectives.find((we) => we.id === durationEdit.id)
+          return e ? (
+            <DurationPopover
+              elective={e}
+              system={slotSystem}
+              x={durationEdit.x}
+              y={durationEdit.y}
+              onSave={saveDuration}
+              onReset={resetDuration}
+              onClose={() => setDurationEdit(null)}
+            />
+          ) : null
+        })()}
+
+      {/* Right-click action menu for the selected free cells. */}
+      {menu && (
+        <CellMenu
+          x={menu.x}
+          y={menu.y}
+          count={menu.cells.length}
+          allUnavailable={menuAllUnavailable}
+          onRequestChange={requestChangeForCells}
+          onMarkUnavailable={startMarkUnavailable}
+          onClearUnavailable={clearMenuCells}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {/* Reason entry for marking unavailability. */}
+      {reasonEdit && (
+        <ReasonPopover
+          x={reasonEdit.x}
+          y={reasonEdit.y}
+          labels={reasonEdit.cells.map(describeCell)}
+          value={reasonEdit.value}
+          onChange={(v) => setReasonEdit((r) => (r ? { ...r, value: v } : r))}
+          onSave={saveReason}
+          onClose={() => setReasonEdit(null)}
+        />
+      )}
+    </div>
+  )
+}
+
 // Free institute-slot chips (S grey, L indigo). `muted` tones them down for the
 // cells where a studio or elective is already running on top of them.
 function SlotChips({ ids, muted = false }) {
@@ -441,7 +922,7 @@ function SlotChips({ ids, muted = false }) {
 // still surfaces its free S / L institute slots. Cells whose slot IDs overlap
 // optimalSlots are highlighted green — the historically optimal drop targets for
 // the active elective. Right-clicking a placed elective opens the duration editor.
-function PeriodCells({ day, system, course, electives = [], clash, onAssign, onUnassign, onEditDuration, dragActive, anyActive, optimalSlots = [], showFreeSlots = true }) {
+function PeriodCells({ day, system, course, electives = [], clash, onAssign, onUnassign, onEditDuration, dragActive, anyActive, optimalSlots = [], showFreeSlots = true, selfInteractive = false, selectedCells, unavailable = {}, onToggleCell, onCellMenu, discover = false, pickedCell = null, onPickCell }) {
   // Placed electives running today, mapped to the period columns they overlap by
   // their ACTUAL clock time (a custom duration if set, else the slot's timing).
   const eBlocks = electives
@@ -592,18 +1073,101 @@ function PeriodCells({ day, system, course, electives = [], clash, onAssign, onU
     const hasOptimal = optimalSlots.some((sid) => ids.includes(sid))
     const canDrop = !!onAssign && dragActive && hasOptimal
     const canClick = !!onAssign && anyActive && !dragActive && hasOptimal
+
+    // Faculty self view: this free cell is selectable (click) and can be flagged
+    // unavailable (right-click → menu). It reads as a calm slot until picked or
+    // flagged, then tints accent (selected) or red (unavailable).
+    if (selfInteractive) {
+      const key = `${day}#${p.id}`
+      const reason = unavailable[key]
+      const isUnavailable = !!reason
+      const isSelected = selectedCells?.has(key)
+      cells.push(
+        <td
+          key={p.id}
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleCell?.(key)
+          }}
+          onContextMenu={(e) => onCellMenu?.(key, e)}
+          title={
+            isUnavailable
+              ? `Unavailable — ${reason}`
+              : 'Click to select · right-click for options'
+          }
+          className={`group/cell cursor-pointer border-b border-r px-2 py-2 align-top transition dark:border-slate-800 ${
+            isUnavailable
+              ? 'border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-950/25'
+              : isSelected
+                ? 'border-accent bg-accent-soft/60 ring-1 ring-inset ring-accent dark:bg-accent/20'
+                : 'border-slate-200 bg-white hover:bg-accent-soft/30 dark:bg-slate-950 dark:hover:bg-slate-800/50'
+          }`}
+        >
+          <div className="flex min-h-[2.25rem] flex-col justify-center">
+            {isUnavailable ? (
+              <>
+                <span className="flex items-center gap-1 text-[11px] font-semibold text-red-600 dark:text-red-400">
+                  <Ban size={11} className="shrink-0" /> Unavailable
+                </span>
+                <span className="mt-0.5 truncate text-[10px] text-red-500/80 dark:text-red-400/70">
+                  {reason}
+                </span>
+              </>
+            ) : isSelected ? (
+              <span className="flex items-center gap-1 text-[11px] font-semibold text-accent">
+                <Check size={11} className="shrink-0" /> Selected
+              </span>
+            ) : (
+              <span className="text-[10px] text-slate-300 opacity-0 transition group-hover/cell:opacity-100 dark:text-slate-600">
+                Free
+              </span>
+            )}
+          </div>
+        </td>,
+      )
+      i++
+      continue
+    }
+
+    // Course discovery: a free cell offers itself only if it can actually answer
+    // the click — a free institute slot AND something in the catalogue that
+    // meets there. A cell that would open an empty panel stays inert instead, so
+    // the "Add" affordance never promises more than it can give.
+    const cellKey = `${day}#${p.id}`
+    const canDiscover =
+      discover && !!onPickCell && ids.length > 0 && catalogueAt(ids).length > 0
+    const isPicked = canDiscover && pickedCell === cellKey
+
     cells.push(
       <td
         key={p.id}
         onDragOver={canDrop ? (e) => e.preventDefault() : undefined}
         onDrop={canDrop ? (e) => { e.preventDefault(); onAssign() } : undefined}
-        onClick={canClick ? (e) => { e.stopPropagation(); onAssign() } : undefined}
-        className={`border-b border-r px-2 py-2 align-top transition dark:border-slate-800 ${
+        onClick={
+          canDiscover
+            ? (e) => {
+                e.stopPropagation()
+                onPickCell({
+                  key: cellKey,
+                  label: `${day} ${periodLabel(p.start)}–${periodLabel(p.end)}`,
+                  freeIds: ids,
+                })
+              }
+            : canClick
+              ? (e) => { e.stopPropagation(); onAssign() }
+              : undefined
+        }
+        title={canDiscover ? 'Click to see what you can add in this slot' : undefined}
+        className={`group/free border-b border-r px-2 py-2 align-top transition dark:border-slate-800 ${
           hasOptimal && anyActive
             ? canDrop
               ? 'cursor-copy border-green-400 bg-green-50 ring-1 ring-inset ring-green-400/60 dark:bg-green-950/25 dark:ring-green-700/50'
               : 'cursor-pointer border-green-300 bg-green-50/70 ring-1 ring-inset ring-green-300/50 dark:bg-green-950/20 dark:ring-green-800/40'
-            : 'border-slate-200 bg-white dark:bg-slate-950'
+            : isPicked
+              ? 'cursor-pointer border-accent bg-accent-soft/60 ring-1 ring-inset ring-accent dark:bg-accent/20'
+              : canDiscover
+                ? 'cursor-pointer border-slate-200 bg-white hover:bg-accent-soft/30 dark:bg-slate-950 dark:hover:bg-slate-800/50'
+                : 'border-slate-200 bg-white dark:bg-slate-950'
         }`}
       >
         {hasOptimal && anyActive && (
@@ -615,6 +1179,13 @@ function PeriodCells({ day, system, course, electives = [], clash, onAssign, onU
             (they're the drop targets for weekly electives). The day-specific
             comparison view is read-only, so they'd only add noise there. */}
         {showFreeSlots && <SlotChips ids={ids} />}
+        {/* The invitation stays hidden until the pointer is on the cell — the
+            grid is read first as a timetable, not as a row of buttons. */}
+        {canDiscover && !isPicked && (
+          <span className="mt-1 flex items-center gap-0.5 text-[9px] font-medium text-accent opacity-0 transition group-hover/free:opacity-100">
+            <Plus size={9} className="shrink-0" /> Add
+          </span>
+        )}
       </td>,
     )
     i++
@@ -711,7 +1282,29 @@ function Chip({ label, active, onClick }) {
   )
 }
 
-function Legend() {
+function Legend({ variant = 'default' }) {
+  if (variant === 'faculty') {
+    return (
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-slate-400">
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded border border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40" />
+          Your studio (M slot)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded bg-slate-200 dark:bg-slate-700" />
+          Your weekly course
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded border border-accent bg-accent-soft dark:bg-accent/20" />
+          Selected
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded border border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-950/40" />
+          Marked unavailable
+        </span>
+      </div>
+    )
+  }
   return (
     <div className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-slate-400">
       <span className="flex items-center gap-1.5">

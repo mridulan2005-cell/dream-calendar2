@@ -34,7 +34,7 @@ export default function ChangeRequests({
 
   if (collapsed) {
     return (
-      <aside className="sticky top-0 flex h-screen w-12 shrink-0 flex-col items-center gap-3 border-l border-slate-200 bg-slate-50 py-4 dark:border-slate-800 dark:bg-slate-900">
+      <aside className="flex h-full min-h-0 w-12 shrink-0 flex-col items-center gap-3 border-l border-slate-200 bg-slate-50 py-4 dark:border-slate-800 dark:bg-slate-900">
         <button
           onClick={() => setCollapsed(false)}
           title="Show review panel"
@@ -60,7 +60,7 @@ export default function ChangeRequests({
   }
 
   return (
-    <aside className="sticky top-0 flex h-screen w-[300px] shrink-0 flex-col border-l border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
+    <aside className="flex h-full min-h-0 w-[300px] shrink-0 flex-col border-l border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 pt-4 dark:border-slate-800">
         <h2 className="text-sm font-semibold">Review</h2>
         <button

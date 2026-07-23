@@ -11,7 +11,11 @@ import {
 } from '../../logic/timetable.js'
 import CourseFilters from '../CourseFilters.jsx'
 import AddCourseModal from '../AddCourseModal.jsx'
+import MyCoursesToggle from '../MyCoursesToggle.jsx'
 import SectionHeader from './SectionHeader.jsx'
+import StepShell from './StepShell.jsx'
+import AeroSection from './AeroSection.jsx'
+import { FACULTY_IDENTITY } from '../../store/RoleContext.jsx'
 
 const programLabel = (cohort) =>
   PROGRAMS.find((p) => p.id === courseProgram(cohort))?.label || cohort
@@ -21,8 +25,10 @@ const DISCIPLINES = Object.values(DISCIPLINE_LABEL)
 // over from last year; the coordinator confirms/edits programme + discipline,
 // removes courses that aren't running, or adds new ones, then marks the section
 // done (which unlocks allotment).
-export default function CoursesSection() {
+export default function CoursesSection({ nav, scope, setScope, role = 'ttc' }) {
   const { courses, workflow, finaliseCourses, removeCourse, addCourse } = useApp()
+  const isFaculty = role === 'faculty'
+  const [ownScope, setOwnScope] = useState('mine') // faculty: 'mine' | 'all'
   const [filter, setFilter] = useState({ program: '', sub: '', query: '' })
   const [adding, setAdding] = useState(false) // "Add a new course" modal
   const [disc, setDisc] = useState({}) // local discipline overrides, by course id
@@ -34,19 +40,31 @@ export default function CoursesSection() {
     () =>
       courses.filter(
         (c) =>
+          (!isFaculty || ownScope === 'all' || c.faculty.includes(FACULTY_IDENTITY.key)) &&
           matchesFilter(c, filter.program, filter.sub) &&
           (!q || c.code.toLowerCase().includes(q) || c.title.toLowerCase().includes(q)),
       ),
-    [courses, filter, q],
+    [courses, isFaculty, ownScope, filter, q],
   )
   const allottedCount = list.filter(isAllotted).length
 
   const discOf = (c) =>
     disc[c.id] ?? (courseDisciplineCode(c.cohort) ? DISCIPLINE_LABEL[courseDisciplineCode(c.cohort)] : '')
 
+  // A B.Tech department (e.g. Aerospace) reads its published, fixed-slot course
+  // list through the shared read-only step — not the IDC studio-module editor.
+  // Placed after all hooks so hook order is stable when the department switches.
+  if (scope?.departmentId && scope.departmentId !== 'idc') {
+    return <AeroSection mode="courses" nav={nav} scope={scope} setScope={setScope} />
+  }
+
   return (
-    <div className="mx-auto max-w-5xl">
-      <SectionHeader
+    <StepShell
+      nav={nav}
+      scope={scope}
+      setScope={setScope}
+      header={
+        <SectionHeader
         eyebrow={`Department Timetable ${TERM.semester} 2026-27`}
         title="Running Courses List"
         action={
@@ -62,8 +80,10 @@ export default function CoursesSection() {
             {workflow.coursesFinalised ? 'Marked as done' : "Mark this section as 'Done'"}
           </button>
         }
-      />
-
+        />
+      }
+    >
+      <div className="mx-auto max-w-5xl">
       <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
         Courses are carried over from Academic Year {PREV_YEAR}, {TERM.semester} Semester. Make edits
         to this list as required.
@@ -78,6 +98,7 @@ export default function CoursesSection() {
 
       {/* Filter + add */}
       <div className="mt-5 flex items-center gap-4">
+        {isFaculty && <MyCoursesToggle value={ownScope} onChange={setOwnScope} />}
         <CourseFilters value={filter} onChange={setFilter} searchPlaceholder="Search a course code or name" />
         <button
           onClick={() => setAdding(true)}
@@ -156,7 +177,8 @@ export default function CoursesSection() {
       </div>
 
       {adding && <AddCourseModal onClose={() => setAdding(false)} onAdd={addCourse} />}
-    </div>
+      </div>
+    </StepShell>
   )
 }
 

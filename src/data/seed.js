@@ -6,6 +6,15 @@
 
 export const TERM = { academicYear: '2025 - 2026', semester: 'Autumn', dept: 'IDC' }
 
+// --- Term scope (the Master Timetable header) --------------------------------
+// The header scopes the whole page: academic year + semester + department. Only
+// ONE term is actually mapped into the app, so scoping to any other lands on the
+// same "not imported yet" state an unmapped department shows — the dropdowns
+// stay honest rather than silently doing nothing.
+export const ACADEMIC_YEARS = ['2025 - 2026', '2026 - 2027', '2027 - 2028']
+export const SEMESTERS = ['Autumn', 'Spring']
+export const SEEDED_TERM = { academicYear: '2026 - 2027', semester: 'Autumn' }
+
 // --- Student cohorts = the columns of the "Student" view of the timetable ---
 // Ordered so cohorts that share a seminar sit next to each other — that lets a
 // course taught to several cohorts render as one merged block (e.g. DE 804 over

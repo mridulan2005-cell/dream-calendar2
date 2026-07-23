@@ -15,8 +15,8 @@ const items = [
   { label: 'Today', icon: CalendarDays, badge: '24', to: '#today' },
   { label: 'IITB Employees', icon: Users, to: '#employees' },
   { label: 'Faculty Members: IDC', icon: Star, to: '#faculty' },
-  { label: 'Programme Curriculum', icon: GraduationCap, to: '/curriculum', primary: true },
-  { label: 'Department Timetable', icon: Folder, to: '/timetables', primary: true },
+  { label: 'Programme Curriculum', icon: GraduationCap, to: '/faculty/curriculum', primary: true },
+  { label: 'Department Timetable', icon: Folder, to: '/faculty/timetable', primary: true },
 ]
 
 // The collapse preference is shared across every surface that renders the main

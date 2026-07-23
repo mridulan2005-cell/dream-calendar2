@@ -26,13 +26,22 @@ const STEP_ICONS = {
 // Vertical stepper that doubles as the planner's primary navigation.
 // Each item is now a free-access nav item with no visible step number.
 // The rail collapses to a slim icon strip to reclaim horizontal space.
-export default function StepNav({ steps, active, onSelect, stats, progress }) {
+// `bare` drops the panel chrome (own title, border, filled background) so the
+// rail blends as a plain left column under a shared header — used on the Master
+// Timetable, which already carries the department-timetable banner above it.
+export default function StepNav({ steps, active, onSelect, stats, progress, embedded = false, bare = false }) {
   const navigate = useNavigate()
   const [collapsed, setCollapsed] = useState(false)
 
   if (collapsed) {
     return (
-      <aside className="flex w-16 shrink-0 flex-col items-center border-r border-slate-200 bg-slate-50 py-6 dark:border-slate-800 dark:bg-slate-900">
+      <aside
+        className={`flex w-16 shrink-0 flex-col items-center py-6 ${
+          bare
+            ? 'bg-transparent'
+            : 'border-r border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900'
+        }`}
+      >
         <button
           onClick={() => setCollapsed(false)}
           title="Expand navigation"
@@ -78,34 +87,45 @@ export default function StepNav({ steps, active, onSelect, stats, progress }) {
   }
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-slate-200 bg-slate-50 px-4 py-6 dark:border-slate-800 dark:bg-slate-900">
-      <div className="mb-6 flex items-center justify-between px-2">
-        <button
-          onClick={() => navigate('/experience')}
-          className="flex items-center gap-1 text-xs font-medium text-slate-400 transition hover:text-slate-700 dark:hover:text-slate-200"
-        >
-          <ChevronLeft size={14} /> IITB Experience
-        </button>
-        <button
-          onClick={() => setCollapsed(true)}
-          title="Collapse navigation"
-          aria-label="Collapse navigation"
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-        >
-          <PanelLeftClose size={16} />
-        </button>
+    <aside
+      className={`flex w-52 shrink-0 flex-col px-3 py-5 ${
+        bare
+          ? 'bg-transparent'
+          : 'border-r border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900'
+      }`}
+    >
+      {/* Title at the very top; the collapse control sits inline with it. In
+          `bare` mode the shared banner above supplies the heading, so the rail
+          shows just the collapse control with no title or divider. */}
+      <div className={`px-2 ${bare ? 'mb-2' : 'mb-5 border-b border-slate-200 pb-4 dark:border-slate-800'}`}>
+        {!embedded && !bare && (
+          <button
+            onClick={() => navigate('/experience')}
+            className="text-body2-regular mb-2 flex items-center gap-1 font-medium text-slate-400 transition hover:text-slate-700 dark:hover:text-slate-200"
+          >
+            <ChevronLeft size={12} /> IITB Experience
+          </button>
+        )}
+        <div className="flex items-start justify-between gap-2">
+          {!bare && (
+            <div className="min-w-0">
+              <div className="text-h3-bold truncate text-slate-800 dark:text-slate-100">Timetable Gen</div>
+            </div>
+          )}
+          <button
+            onClick={() => setCollapsed(true)}
+            title="Collapse navigation"
+            aria-label="Collapse navigation"
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 ${
+              bare ? 'ml-auto' : '-mr-1'
+            }`}
+          >
+            <PanelLeftClose size={16} />
+          </button>
+        </div>
       </div>
 
-      <div className="mb-7 border-b border-slate-200 px-2 pb-5 dark:border-slate-800">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-          Institute Planner
-        </div>
-        <div className="mt-1 text-xl font-bold text-slate-800 dark:text-slate-100">
-          Timetable Gen
-        </div>
-      </div>
-
-      <nav className="flex flex-1 flex-col gap-1" aria-label="Planner steps">
+      <nav className="flex flex-1 flex-col gap-0.5" aria-label="Planner steps">
         {steps.map((s) => {
           const isActive = s.id === active
           const disabled = s.locked
@@ -115,7 +135,7 @@ export default function StepNav({ steps, active, onSelect, stats, progress }) {
               disabled={disabled}
               aria-current={isActive ? 'step' : undefined}
               onClick={() => !disabled && onSelect(s.id)}
-              className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition ${
+              className={`group text-body1-medium flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition ${
                 isActive
                   ? 'bg-accent-soft text-slate-900 dark:bg-slate-800 dark:text-white'
                   : disabled
@@ -150,28 +170,28 @@ export default function StepNav({ steps, active, onSelect, stats, progress }) {
 function StepMarker({ id, done, active, locked }) {
   if (locked) {
     return (
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-dashed border-slate-300 text-slate-300 dark:border-slate-700 dark:text-slate-600">
-        <Lock size={12} />
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-slate-300 text-slate-300 dark:border-slate-700 dark:text-slate-600">
+        <Lock size={11} />
       </span>
     )
   }
   if (done) {
     return (
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-600 text-white">
-        <Check size={14} />
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-green-600 text-white">
+        <Check size={13} />
       </span>
     )
   }
   const Icon = STEP_ICONS[id] || BookOpen
   return (
     <span
-      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition ${
+      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition ${
         active
           ? 'bg-accent text-white'
           : 'border border-slate-300 text-slate-500 group-hover:border-accent group-hover:text-accent dark:border-slate-600 dark:text-slate-300'
       }`}
     >
-      <Icon size={14} />
+      <Icon size={13} />
     </span>
   )
 }

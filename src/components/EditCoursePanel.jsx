@@ -36,7 +36,7 @@ export default function EditCoursePanel({
   const alts = (ranking?.top || []).filter((s) => s !== candidateSlot).slice(0, 2)
 
   return (
-    <aside className="sticky top-0 flex h-screen w-[380px] shrink-0 flex-col border-l border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
+    <aside className="flex h-full min-h-0 w-[380px] shrink-0 flex-col border-l border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
       {/* Header with back-navigation */}
       <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
         <button

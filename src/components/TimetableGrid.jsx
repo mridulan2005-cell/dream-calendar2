@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { Ban, Check } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
 import { buildGrid, detectConflicts } from '../logic/timetable.js'
+import { CellMenu, ReasonPopover } from './AvailabilityMenus.jsx'
 
 // "2025-07-28" → "28-07" for the Week / Start / End date columns.
 const ddmm = (iso) => {
@@ -92,6 +94,10 @@ export default function TimetableGrid({
   view,
   onCellClick,
   highlightCourseId,
+  // When set to a faculty name, that faculty's own courses are emphasised (accent
+  // ring + tint) and every other block is dimmed — the read-only faculty view of
+  // the master timetable.
+  facultyHighlight = null,
   placement,
   disputedIds,
   onMoveCourses,
@@ -102,6 +108,10 @@ export default function TimetableGrid({
   // red clash highlight belongs only to the live draft being built. When set,
   // conflict styling is suppressed so the grid reads as one calm, settled plan.
   hideConflicts = false,
+  // Faculty availability (their own column in the Faculty pivot): lets the
+  // faculty select empty week cells to mark unavailability, and right-click a
+  // course cell to raise a change request. Null for the coordinator.
+  facultyAvail = null,
 }) {
   const { courses: committed, conflicts: committedConflicts } = useApp()
   const disputed = disputedIds || new Set()
@@ -114,6 +124,104 @@ export default function TimetableGrid({
   const { rows, columns, cell } = buildGrid(courses, view)
   const containerRef = useRef(null)
   const active = placement?.active
+  // Faculty read-only view: is this course taught by the focused faculty?
+  const isMine = (c) => !!facultyHighlight && c.faculty?.includes(facultyHighlight)
+
+  // --- Faculty availability (their own column) ------------------------------
+  // Active only for the faculty's own column, when not mid-placement.
+  const availCol = !active && facultyAvail?.columnKey ? facultyAvail.columnKey : null
+  const availUnavailable = facultyAvail?.unavailable || {}
+  const [selectedWeeks, setSelectedWeeks] = useState(() => new Set())
+  const [availMenu, setAvailMenu] = useState(null) // { x, y, weeks:[], course? }
+  const [reasonEdit, setReasonEdit] = useState(null) // { x, y, weeks:[], value }
+
+  const weekLabelOf = (slotId) => {
+    const r = rows.find((x) => x.id === slotId)
+    return r ? `Week ${r.label}` : slotId
+  }
+  const clearAvailSelection = () => {
+    setSelectedWeeks((prev) => (prev.size ? new Set() : prev))
+    setAvailMenu(null)
+  }
+  const toggleWeek = (slotId) => {
+    setAvailMenu(null)
+    setSelectedWeeks((prev) => {
+      const next = new Set(prev)
+      next.has(slotId) ? next.delete(slotId) : next.add(slotId)
+      return next
+    })
+  }
+  // Right-click an empty week cell → menu over the current week selection.
+  const openWeekMenu = (slotId, ev) => {
+    ev.preventDefault()
+    ev.stopPropagation()
+    const weeks = selectedWeeks.has(slotId) ? [...selectedWeeks] : [slotId]
+    if (!selectedWeeks.has(slotId)) setSelectedWeeks(new Set([slotId]))
+    setAvailMenu({ x: ev.clientX, y: ev.clientY, weeks })
+  }
+  // Right-click a course cell in their column → a request-change entry point.
+  const openCourseMenu = (course, ev) => {
+    ev.preventDefault()
+    ev.stopPropagation()
+    clearAvailSelection()
+    setAvailMenu({ x: ev.clientX, y: ev.clientY, weeks: [], course })
+  }
+  // Order a set of week ids by their position in the grid.
+  const orderWeeks = (ids) => {
+    const idx = (id) => rows.findIndex((r) => r.id === id)
+    return [...ids].sort((a, b) => idx(a) - idx(b))
+  }
+  const menuAllUnavailable =
+    availMenu && availMenu.weeks.length > 0 && availMenu.weeks.every((id) => availUnavailable[id])
+  const startMarkUnavailable = () => {
+    if (!availMenu) return
+    const existing = availMenu.weeks.map((id) => availUnavailable[id]).find(Boolean) || ''
+    setReasonEdit({ x: availMenu.x, y: availMenu.y, weeks: availMenu.weeks, value: existing })
+    setAvailMenu(null)
+  }
+  const saveReason = () => {
+    if (!reasonEdit) return
+    facultyAvail?.onMarkUnavailable?.(orderWeeks(reasonEdit.weeks), reasonEdit.value.trim() || 'Unavailable')
+    setReasonEdit(null)
+    clearAvailSelection()
+  }
+  const clearMenuWeeks = () => {
+    if (!availMenu) return
+    facultyAvail?.onClearUnavailable?.(availMenu.weeks)
+    setAvailMenu(null)
+    clearAvailSelection()
+  }
+  const requestChangeFromMenu = () => {
+    if (!availMenu) return
+    if (availMenu.course) {
+      facultyAvail?.onRequestChange?.(null, availMenu.course.id)
+    } else {
+      const label = orderWeeks(availMenu.weeks).map(weekLabelOf).join(', ')
+      facultyAvail?.onRequestChange?.(`Regarding my schedule — ${label}: `)
+    }
+    setAvailMenu(null)
+    clearAvailSelection()
+  }
+
+  // Escape dismisses the menu / reason popover / selection.
+  useEffect(() => {
+    if (!availCol) return
+    const onKey = (ev) => {
+      if (ev.key !== 'Escape') return
+      if (reasonEdit) setReasonEdit(null)
+      else if (availMenu) setAvailMenu(null)
+      else clearAvailSelection()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [availCol, reasonEdit, availMenu]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear any selection if the interactive column goes away (view switch).
+  useEffect(() => {
+    setSelectedWeeks(new Set())
+    setAvailMenu(null)
+    setReasonEdit(null)
+  }, [availCol, view])
 
   // Grouped program/year header is meaningful only for the cohort ("student")
   // view; faculty/venue columns are flat names and keep the plain single row.
@@ -182,6 +290,13 @@ export default function TimetableGrid({
     const el = containerRef.current.querySelector('[data-rank="1"]')
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
   }, [active, placement?.course?.id])
+
+  // Bring the faculty's own column into view when it becomes interactive.
+  useEffect(() => {
+    if (!availCol || !containerRef.current) return
+    const el = containerRef.current.querySelector('[data-availcol="1"]')
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+  }, [availCol])
 
   const subtitle = (course) => {
     if (view === 'student') return course.venue || '—'
@@ -270,7 +385,40 @@ export default function TimetableGrid({
   }
 
   return (
-    <div ref={containerRef} className="thin-scroll h-full overflow-auto">
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Faculty availability hint / live selection count. */}
+      {availCol && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+          {selectedWeeks.size > 0 ? (
+            <>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 font-semibold text-accent dark:bg-slate-800 dark:text-slate-100">
+                {selectedWeeks.size} week{selectedWeeks.size > 1 ? 's' : ''} selected
+              </span>
+              <span className="text-slate-500 dark:text-slate-400">
+                Right-click to request a change or mark unavailable
+              </span>
+              <button
+                onClick={clearAvailSelection}
+                className="ml-1 rounded-md px-2 py-0.5 font-medium text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
+              >
+                Clear
+              </button>
+            </>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+              <Ban size={13} className="text-slate-400" />
+              Your column is highlighted. Click empty weeks to select, then right-click to request a
+              change or mark yourself unavailable · right-click a course to request a change.
+            </span>
+          )}
+        </div>
+      )}
+
+      <div
+        ref={containerRef}
+        className="thin-scroll min-h-0 flex-1 overflow-auto"
+        onClick={availCol ? clearAvailSelection : undefined}
+      >
       <table className="w-full border-collapse text-xs">
         <thead>
           {grouped ? (
@@ -279,19 +427,19 @@ export default function TimetableGrid({
               <tr>
                 <th
                   rowSpan={2}
-                  className="sticky left-0 top-0 z-30 w-12 min-w-[3rem] border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
+                  className="sticky left-0 top-0 z-30 w-12 min-w-[3rem] border border-slate-200 bg-[#F5F9F8] px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
                 >
                   Week
                 </th>
                 <th
                   rowSpan={2}
-                  className="sticky left-[3rem] top-0 z-30 w-14 min-w-[3.5rem] border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
+                  className="sticky left-[3rem] top-0 z-30 w-14 min-w-[3.5rem] border border-slate-200 bg-[#F5F9F8] px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
                 >
                   Start
                 </th>
                 <th
                   rowSpan={2}
-                  className="sticky left-[6.5rem] top-0 z-30 w-14 min-w-[3.5rem] border border-slate-200 bg-white px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
+                  className="sticky left-[6.5rem] top-0 z-30 w-14 min-w-[3.5rem] border border-slate-200 bg-[#F5F9F8] px-2 text-left align-middle font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-950"
                 >
                   End
                 </th>
@@ -299,7 +447,7 @@ export default function TimetableGrid({
                   <th
                     key={g.startCol}
                     colSpan={g.span}
-                    className="sticky top-0 z-20 h-9 border border-slate-200 bg-white px-2 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                    className="sticky top-0 z-20 h-9 border border-slate-200 bg-[#F5F9F8] px-2 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
                   >
                     {g.group}
                   </th>
@@ -318,7 +466,7 @@ export default function TimetableGrid({
                       } ${
                         dragInfo && dragInfo.column === col
                           ? 'bg-accent-soft font-semibold text-accent dark:bg-accent/20'
-                          : 'bg-white dark:bg-slate-950'
+                          : 'bg-[#F5F9F8] dark:bg-slate-950'
                       } ${
                         active && col === placement.column
                           ? 'text-slate-900 dark:text-white'
@@ -337,47 +485,60 @@ export default function TimetableGrid({
             </>
           ) : (
             <tr>
-              <th className="sticky left-0 top-0 z-30 h-12 w-12 min-w-[3rem] border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <th className="sticky left-0 top-0 z-30 h-12 w-12 min-w-[3rem] border border-slate-200 bg-[#F5F9F8] px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 Week
               </th>
-              <th className="sticky left-[3rem] top-0 z-30 h-12 w-14 min-w-[3.5rem] border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <th className="sticky left-[3rem] top-0 z-30 h-12 w-14 min-w-[3.5rem] border border-slate-200 bg-[#F5F9F8] px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 Start
               </th>
-              <th className="sticky left-[6.5rem] top-0 z-30 h-12 w-14 min-w-[3.5rem] border border-slate-200 bg-white px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <th className="sticky left-[6.5rem] top-0 z-30 h-12 w-14 min-w-[3.5rem] border border-slate-200 bg-[#F5F9F8] px-2 text-left font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 End
               </th>
-              {columns.map((col) => (
+              {columns.map((col) => {
+                const isAvail = col === availCol
+                return (
                 <th
                   key={col}
-                  className={`sticky top-0 z-20 h-12 min-w-[120px] border border-slate-200 px-2 text-left font-medium transition-colors dark:border-slate-800 ${
-                    dragInfo && dragInfo.column === col
+                  data-availcol={isAvail ? '1' : undefined}
+                  className={`sticky top-0 z-20 h-12 min-w-[120px] border px-2 text-left font-medium transition-colors ${
+                    isAvail
+                      ? 'border-accent/40 dark:border-accent/40'
+                      : 'border-slate-200 dark:border-slate-800'
+                  } ${
+                    isAvail
                       ? 'bg-accent-soft font-semibold text-accent dark:bg-accent/20'
-                      : 'bg-white dark:bg-slate-950'
+                      : dragInfo && dragInfo.column === col
+                      ? 'bg-accent-soft font-semibold text-accent dark:bg-accent/20'
+                      : 'bg-[#F5F9F8] dark:bg-slate-950'
                   } ${
                     active && col === placement.column
                       ? 'text-slate-900 dark:text-white'
+                      : isAvail
+                      ? ''
                       : 'text-slate-600 dark:text-slate-300'
                   } ${dragInfo && dragInfo.column !== col ? 'opacity-40' : ''}`}
                 >
                   {col}
+                  {isAvail && <span className="ml-1 text-[10px] font-normal text-accent">• you</span>}
                   {active && col === placement.column && (
                     <span className="ml-1 text-[10px] font-normal text-accent">• moving</span>
                   )}
                 </th>
-              ))}
+                )
+              })}
             </tr>
           )}
         </thead>
         <tbody>
           {rows.map((slot, ri) => (
             <tr key={slot.id}>
-              <td className="sticky left-0 z-10 h-16 w-12 min-w-[3rem] border border-slate-200 bg-white px-2 py-3 align-top font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <td className="sticky left-0 z-10 h-16 w-12 min-w-[3rem] border border-slate-200 bg-[#F5F9F8] px-2 py-3 align-top font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 {slot.label}
               </td>
-              <td className="sticky left-[3rem] z-10 h-16 w-14 min-w-[3.5rem] whitespace-nowrap border border-slate-200 bg-white px-2 py-3 align-top text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <td className="sticky left-[3rem] z-10 h-16 w-14 min-w-[3.5rem] whitespace-nowrap border border-slate-200 bg-[#F5F9F8] px-2 py-3 align-top text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 {ddmm(slot.dateRange.start)}
               </td>
-              <td className="sticky left-[6.5rem] z-10 h-16 w-14 min-w-[3.5rem] whitespace-nowrap border border-slate-200 bg-white px-2 py-3 align-top text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+              <td className="sticky left-[6.5rem] z-10 h-16 w-14 min-w-[3.5rem] whitespace-nowrap border border-slate-200 bg-[#F5F9F8] px-2 py-3 align-top text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
                 {ddmm(slot.dateRange.end)}
               </td>
               {columns.map((col, ci) => {
@@ -416,6 +577,21 @@ export default function TimetableGrid({
                     : null
                 const dimmed = dragInfo && dragInfo.column !== col
                 const highlightCol = dragInfo && dragInfo.column === col
+                const availColHere = col === availCol
+
+                // Faculty's own column: an empty week cell is a selectable /
+                // unavailable target; a course cell gets a right-click request.
+                if (availColHere && list.length === 0 && entry.rowSpan === 1 && entry.colSpan === 1) {
+                  return (
+                    <FacultyAvailCell
+                      key={col}
+                      selected={selectedWeeks.has(slot.id)}
+                      reason={availUnavailable[slot.id]}
+                      onToggle={() => toggleWeek(slot.id)}
+                      onMenu={(ev) => openWeekMenu(slot.id, ev)}
+                    />
+                  )
+                }
 
                 return (
                   <PlacementCell
@@ -465,20 +641,32 @@ export default function TimetableGrid({
                             !hideConflicts &&
                             list.some((c) => conflicts.conflictCells.has(`${c.id}@${slot.id}`))
                           const groupHl = list.some((c) => c.id === highlightCourseId)
+                          const groupMine = list.some(isMine)
                           return (
                             <button
                               data-hl={groupHl ? '1' : undefined}
                               onClick={() => onCellClick(list[0], list)}
+                              onContextMenu={
+                                availColHere ? (e) => openCourseMenu(list[0], e) : undefined
+                              }
                               className={`relative flex h-full w-full flex-col overflow-hidden rounded-md text-left transition ${
+                                availColHere ? 'cursor-context-menu' : ''
+                              } ${
                                 anyClash
                                   ? 'bg-red-100 hover:bg-red-200 dark:bg-red-950/40'
-                                  : 'bg-slate-100 hover:bg-accent-soft dark:bg-slate-800 dark:hover:bg-slate-700'
+                                  : 'bg-[#E1E8EF] hover:bg-accent-soft dark:bg-slate-800 dark:hover:bg-slate-700'
                               } ${
                                 groupHl
                                   ? 'ring-2 ring-amber-400 ring-offset-1 dark:ring-offset-slate-950'
                                   : anyClash
                                     ? 'ring-1 ring-red-400 dark:ring-red-700'
                                     : ''
+                              } ${
+                                facultyHighlight
+                                  ? groupMine
+                                    ? 'ring-2 ring-accent ring-offset-1 dark:ring-offset-slate-950'
+                                    : 'opacity-40'
+                                  : ''
                               }`}
                             >
                               {anyDisputed && (
@@ -513,6 +701,7 @@ export default function TimetableGrid({
                           const clash =
                             !hideConflicts && conflicts.conflictCells.has(`${course.id}@${slot.id}`)
                           const highlighted = course.id === highlightCourseId
+                          const mine = isMine(course)
                           const isOrigin =
                             active && course.id === placement.course.id && slot.id === placement.fromSlot
                           const canDrag = isOrigin || (dndEnabled && entry.colSpan === 1)
@@ -545,14 +734,19 @@ export default function TimetableGrid({
                                 setOverKey(null)
                               }}
                               onClick={() => !active && onCellClick(course)}
+                              onContextMenu={
+                                availColHere ? (e) => openCourseMenu(course, e) : undefined
+                              }
                               className={`relative flex h-full w-full flex-col justify-start overflow-hidden rounded-md px-2 py-1.5 text-left transition ${
                                 list.length > 1 ? 'min-w-[84px] flex-1 basis-0' : ''
+                              } ${
+                                availColHere ? 'cursor-context-menu' : ''
                               } ${
                                 canDrag ? 'cursor-grab active:cursor-grabbing' : ''
                               } ${
                                 clash
                                   ? 'bg-red-100 hover:bg-red-200 dark:bg-red-950/40'
-                                  : 'bg-slate-100 hover:bg-accent-soft dark:bg-slate-800 dark:hover:bg-slate-700'
+                                  : 'bg-[#E1E8EF] hover:bg-accent-soft dark:bg-slate-800 dark:hover:bg-slate-700'
                               } ${
                                 isOrigin
                                   ? 'cursor-grab ring-2 ring-accent ring-offset-1 dark:ring-offset-slate-950'
@@ -563,6 +757,12 @@ export default function TimetableGrid({
                                       : ''
                               } ${active && !isOrigin ? 'opacity-60' : ''} ${
                                 dragInfo?.courseId === course.id ? 'opacity-30' : ''
+                              } ${
+                                facultyHighlight
+                                  ? mine
+                                    ? 'ring-2 ring-accent ring-offset-1 dark:ring-offset-slate-950'
+                                    : 'opacity-40'
+                                  : ''
                               }`}
                             >
                               {!active && disputed.has(course.id) && (
@@ -600,7 +800,80 @@ export default function TimetableGrid({
           ))}
         </tbody>
       </table>
+      </div>
+
+      {/* Faculty availability: right-click action menu + reason entry. */}
+      {availMenu && (
+        <CellMenu
+          x={availMenu.x}
+          y={availMenu.y}
+          count={availMenu.weeks.length}
+          title={availMenu.course ? availMenu.course.code : undefined}
+          showUnavailable={!availMenu.course}
+          allUnavailable={menuAllUnavailable}
+          onRequestChange={requestChangeFromMenu}
+          onMarkUnavailable={startMarkUnavailable}
+          onClearUnavailable={clearMenuWeeks}
+          onClose={() => setAvailMenu(null)}
+        />
+      )}
+      {reasonEdit && (
+        <ReasonPopover
+          x={reasonEdit.x}
+          y={reasonEdit.y}
+          labels={orderWeeks(reasonEdit.weeks).map(weekLabelOf)}
+          value={reasonEdit.value}
+          onChange={(v) => setReasonEdit((r) => (r ? { ...r, value: v } : r))}
+          onSave={saveReason}
+          onClose={() => setReasonEdit(null)}
+        />
+      )}
     </div>
+  )
+}
+
+// A faculty's own empty week cell — selectable, and markable unavailable. Reads
+// calm until picked (accent) or flagged (red), mirroring the weekly grid's
+// availability cells.
+function FacultyAvailCell({ selected, reason, onToggle, onMenu }) {
+  const isUnavailable = !!reason
+  return (
+    <td
+      onClick={(e) => {
+        e.stopPropagation()
+        onToggle()
+      }}
+      onContextMenu={onMenu}
+      title={isUnavailable ? `Unavailable — ${reason}` : 'Click to select · right-click for options'}
+      className={`group/av relative h-16 cursor-pointer border align-top transition-colors ${
+        isUnavailable
+          ? 'border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-950/25'
+          : selected
+            ? 'border-accent bg-accent-soft/60 ring-1 ring-inset ring-accent dark:bg-accent/20'
+            : 'border-slate-200 bg-white hover:bg-accent-soft/30 dark:border-slate-800 dark:bg-slate-950 dark:hover:bg-slate-800/50'
+      }`}
+    >
+      <div className="flex h-full flex-col justify-center px-2 py-1.5">
+        {isUnavailable ? (
+          <>
+            <span className="flex items-center gap-1 text-[11px] font-semibold text-red-600 dark:text-red-400">
+              <Ban size={11} className="shrink-0" /> Unavailable
+            </span>
+            <span className="mt-0.5 truncate text-[10px] text-red-500/80 dark:text-red-400/70">
+              {reason}
+            </span>
+          </>
+        ) : selected ? (
+          <span className="flex items-center gap-1 text-[11px] font-semibold text-accent">
+            <Check size={11} className="shrink-0" /> Selected
+          </span>
+        ) : (
+          <span className="text-[10px] text-slate-300 opacity-0 transition group-hover/av:opacity-100 dark:text-slate-600">
+            Free
+          </span>
+        )}
+      </div>
+    </td>
   )
 }
 

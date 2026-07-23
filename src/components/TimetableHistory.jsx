@@ -29,7 +29,7 @@ export default function TimetableHistory({ changes, selectedCourseId, onSelect, 
   }, [selectedCourseId])
 
   return (
-    <aside className="sticky top-0 flex h-screen w-[300px] shrink-0 flex-col border-l border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
+    <aside className="flex h-full min-h-0 w-[300px] shrink-0 flex-col border-l border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900">
       <header className="flex items-start justify-between gap-2 border-b border-slate-200 px-4 py-4 dark:border-slate-800">
         <div>
           <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-100">

@@ -4,8 +4,20 @@
     {
       "name": "calendar-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "--port", "5191", "--strictPort"],
-      "port": 5191
+      "runtimeArgs": ["run", "dev"],
+      "autoPort": true
+    },
+    {
+      "name": "calendar-dev-2",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "autoPort": true
+    },
+    {
+      "name": "calendar-dev-3",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "autoPort": true
     }
   ]
 }

@@ -1,17 +1,28 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, AlertTriangle, CheckCircle2, Undo2, Redo2, X, Download, Check, Layers, History } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Undo2, Redo2, X, Download, Check, Layers, History, MessageSquarePlus, ChevronDown, Clock3 } from 'lucide-react'
 import { useApp } from '../store/AppContext.jsx'
-import { TERM, slotLabel, slots as allSlots } from '../data/seed.js'
+import { FACULTY_IDENTITY } from '../store/RoleContext.jsx'
+import {
+  slotLabel,
+  slots as allSlots,
+  cohorts,
+  SEEDED_TERM,
+} from '../data/seed.js'
+import { departments } from '../data/aeroTimetable.js'
+import { REGISTRATION } from '../data/catalogue.js'
 import { rankDestinations, evaluateCourse } from '../logic/constraints.js'
 import { timetableChanges } from '../logic/timetable.js'
 import TimetableGrid from '../components/TimetableGrid.jsx'
 import WeeklyTimetable from '../components/WeeklyTimetable.jsx'
+import AeroTimetable from '../components/AeroTimetable.jsx'
 import ChangeRequests from '../components/ChangeRequests.jsx'
 import TimetableHistory from '../components/TimetableHistory.jsx'
 import EditCoursePanel from '../components/EditCoursePanel.jsx'
 import CoursePanel from '../components/CoursePanel.jsx'
 import ShareModal from '../components/ShareModal.jsx'
+import RequestChangeModal from '../components/RequestChangeModal.jsx'
+import CourseDiscoveryPanel from '../components/CourseDiscoveryPanel.jsx'
+import ScopeBand from '../components/ScopeBand.jsx'
 
 const VIEWS = [
   { id: 'student', label: 'Student' },
@@ -47,17 +58,99 @@ function requestSatisfied(course, op) {
   }
 }
 
-export default function DraftTimetable() {
-  const navigate = useNavigate()
+// `nav` is the planner step-nav, rendered beneath the full-width page header and
+// to the left of the grid — so the header banners the whole view, the reference
+// layout the Master Timetable follows.
+// `viewer` collapses the view to a read-only Master Timetable (no planner nav, no
+// review rail, no editing). When `role === 'faculty'` we additionally highlight
+// that faculty's own courses and offer a "Request a change" action to the
+// coordinator instead of the publish/conflict controls.
+export default function DraftTimetable({ nav = null, viewer = false, role = 'ttc', scope, setScope }) {
+  const isFaculty = viewer && role === 'faculty'
+  const isStudent = viewer && role === 'student'
+  const facultyKey = isFaculty ? FACULTY_IDENTITY.key : null
+  // The free cell a student is browsing courses for: { key, label, freeIds }.
+  const [discoverCell, setDiscoverCell] = useState(null)
+  const [requesting, setRequesting] = useState(null) // course preselected for a change request, or `true`
+  // --- Page scope (the header) ----------------------------------------------
+  // Academic year + semester + department together decide what the page shows.
+  // `idc` is the studio-module planner below; a B.Tech department (e.g.
+  // Aerospace) swaps in its own fixed-slot timetable. Only the seeded term has
+  // data, so any other lands on the "not imported yet" state.
+  // Scope is owned by the Workspace (shared across every step). Fall back to a
+  // local default only if this page is ever rendered standalone without it.
+  const [localScope, setLocalScope] = useState({
+    academicYear: SEEDED_TERM.academicYear,
+    semester: SEEDED_TERM.semester,
+    departmentId: 'idc',
+  })
+  const activeScope = scope || localScope
+  const applyScope = setScope || setLocalScope
+  const { academicYear, semester, departmentId } = activeScope
+  const termReady =
+    academicYear === SEEDED_TERM.academicYear && semester === SEEDED_TERM.semester
+  const department = departments.find((d) => d.id === departmentId) || departments[0]
+  const isIDC = department.id === 'idc'
   const { courses, changeRequests, conflicts, pendingRequests, workflow, publish, updateCourse, updateCourses, resolveRequests, undo, redo, canUndo, canRedo } =
     useApp()
 
   // Undo / redo keyboard shortcuts are wired globally in AppProvider.
-  const [view, setView] = useState('student')
-  const [viewMode, setViewMode] = useState('sem') // 'sem' | 'weekly'
+  // Faculty open on the Faculty pivot so their own column is present and
+  // interactive in the semester grid (mark unavailability / request a change);
+  // the coordinator keeps the cohort ("student") view.
+  const [view, setView] = useState(isFaculty ? 'faculty' : 'student')
+  // Faculty land straight on their own weekly schedule — that's where they can
+  // review their week and mark unavailability. The coordinator opens on the
+  // semester grid as before.
+  const [viewMode, setViewMode] = useState(isFaculty ? 'weekly' : 'sem') // 'sem' | 'weekly'
+  // Weekly-view controls (owned here so they sit on the Select-View line):
+  // a Student/Faculty pivot plus a dropdown to pick the batch or faculty shown.
+  const [weeklyMode, setWeeklyMode] = useState(isFaculty ? 'faculty' : 'student')
+  const [weeklyCohort, setWeeklyCohort] = useState(null)
+  const [weeklyFaculty, setWeeklyFaculty] = useState(isFaculty ? FACULTY_IDENTITY.key : null)
   const [sharing, setSharing] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false) // change-history rail open?
   const weekly = viewMode === 'weekly'
+
+  // A student picks courses into their free slots only while registration is
+  // open — once teaching starts the week is settled and an empty cell is just an
+  // empty cell. Their own week (the student pivot) is the only place the question
+  // "what could I take here?" has an answer.
+  const canDiscover = isStudent && weekly && weeklyMode === 'student' && REGISTRATION.open
+  // Leaving the view that the panel belongs to closes it.
+  useEffect(() => {
+    if (!canDiscover) setDiscoverCell(null)
+  }, [canDiscover])
+
+  // Faculty-marked unavailability on the weekly grid. Keyed `${day}#${periodId}`
+  // → reason. A recurring weekly block ("don't schedule me here") the faculty
+  // flags on their own schedule; it tints the cell and is surfaced to the
+  // coordinator alongside change requests. Session-local in this wireframe.
+  const [unavailability, setUnavailability] = useState({})
+  const markUnavailable = useCallback((cells, reason) => {
+    setUnavailability((prev) => {
+      const next = { ...prev }
+      for (const key of cells) next[key] = reason
+      return next
+    })
+  }, [])
+  const clearUnavailable = useCallback((cells) => {
+    setUnavailability((prev) => {
+      const next = { ...prev }
+      for (const key of cells) delete next[key]
+      return next
+    })
+  }, [])
+  // The semester grid marks unavailability per WEEK (a slot id), stored under a
+  // `sem#` namespace so it doesn't collide with the weekly `day#period` keys.
+  // This is the week→reason view the grid reads directly.
+  const semUnavailable = useMemo(() => {
+    const out = {}
+    for (const [k, v] of Object.entries(unavailability)) {
+      if (k.startsWith('sem#')) out[k.slice(4)] = v
+    }
+    return out
+  }, [unavailability])
 
   // Every place the live timetable has drifted from last year's carried-over
   // mapping (a course moved weeks, or a room reassigned) — drives the change
@@ -71,6 +164,24 @@ export default function DraftTimetable() {
     () => courses.find((c) => c.slots.length > 0) || courses[0] || null,
     [courses],
   )
+
+  // The faculty who actually teach something, for the weekly Faculty dropdown.
+  const facultyOptions = useMemo(
+    () => [...new Set(courses.flatMap((c) => c.faculty || []))].sort((a, b) => a.localeCompare(b)),
+    [courses],
+  )
+  // Which entity the weekly view renders — the chosen batch or faculty, falling
+  // back to a sensible default when nothing has been picked yet.
+  const weeklySelected =
+    weeklyMode === 'faculty'
+      ? weeklyFaculty || facultyOptions[0] || null
+      : weeklyCohort || weeklyFocus?.cohort || cohorts[0]
+
+  // The panel is anchored to one cell of one batch's week — switching batch
+  // leaves it pointing at a slot the student is no longer looking at.
+  useEffect(() => {
+    setDiscoverCell(null)
+  }, [weeklySelected])
 
   // Courses still not mapped onto the semester grid (no weeks allotted) — these
   // populate the bottom tray, draggable onto a week to place them.
@@ -296,7 +407,9 @@ export default function DraftTimetable() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `timetable-${TERM.semester}-2026-27`.replace(/\s+/g, '-').toLowerCase() + '.csv'
+    // Name the file after the term the header is actually scoped to
+    // ("Autumn" + "2026 - 2027" → timetable-autumn-2026-2027.csv).
+    a.download = `timetable-${semester}-${academicYear}`.replace(/\s+/g, '').toLowerCase() + '.csv'
     document.body.appendChild(a)
     a.click()
     a.remove()
@@ -304,61 +417,142 @@ export default function DraftTimetable() {
   }
 
   return (
-    <div className="flex h-full min-w-0 flex-1 overflow-hidden bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      {/* Left: header/controls stay static; only the grid scrolls. */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
-        <header className="flex shrink-0 items-start justify-between border-b border-slate-100 bg-white px-8 py-5 dark:border-slate-800 dark:bg-slate-950">
-          <div>
-            <div className="mb-1 text-sm font-medium text-slate-500 dark:text-slate-400">
-              Department Timetable · {TERM.semester} 2026-27
+    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-[#F5F9F8] text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      {/* One vertical scroll: the scope band + title scroll away, then the grid
+          area (below) fills the viewport and keeps its own internal scroll — so
+          the timetable claims the whole screen once the header is scrolled off. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+        {/* Page header — a full-width band that scrolls away with the page.
+            One scope line (the term on the left, the department at the far end),
+            then the title with the page's actions opposite it. */}
+        <header className="border-b border-slate-100 bg-[#F5F9F8] px-8 py-3 dark:border-slate-800 dark:bg-slate-950">
+          {/* Scope: which term, and whose timetable. Everything below answers to it. */}
+          <ScopeBand scope={activeScope} onChange={applyScope} />
+
+          <div className="mt-2.5 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+            <div>
+              <h1 className="text-2xl font-bold">
+                {isIDC ? (viewer ? 'Master Timetable' : 'Draft Timetable') : 'Master Timetable'}
+              </h1>
+              {isIDC && isFaculty && (
+                <div className="mt-1 text-xs font-medium text-accent">
+                  Viewing as {FACULTY_IDENTITY.name} · your courses are highlighted
+                </div>
+              )}
+              {!isIDC && termReady && (
+                <div className="mt-1 text-xs font-medium text-slate-400">
+                  Read-only reference · published department timetable
+                </div>
+              )}
             </div>
-            <h1 className="text-2xl font-bold">Draft Timetable</h1>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-slate-500">
-              <Check size={13} className="text-green-500" /> Auto-saved
-            </span>
-            <button
-              onClick={downloadTimetable}
-              title="Download timetable (CSV)"
-              aria-label="Download timetable"
-              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:text-slate-300"
-            >
-              <Download size={18} />
-            </button>
-            <button
-              onClick={onPublish}
-              disabled={!canPublish}
-              title={
-                workflow.published
-                  ? 'Already published'
-                  : !canPublish
-                    ? 'Resolve all change requests and conflicts first'
-                    : 'Publish timetable'
-              }
-              className={`rounded-xl px-5 py-2.5 text-sm font-semibold transition ${
-                workflow.published
-                  ? 'bg-ok-soft text-green-800'
-                  : canPublish
-                    ? 'bg-accent text-white hover:brightness-95'
-                    : 'cursor-not-allowed bg-slate-100 text-slate-400 dark:bg-slate-800'
-              }`}
-            >
-              {workflow.published ? 'Published ✓' : 'Publish Timetable'}
-            </button>
-            <button
-              onClick={() => setSharing(true)}
-              className="rounded-xl bg-slate-100 px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200"
-            >
-              Share access
-            </button>
+            {termReady && (
+              <div className="flex items-center gap-3">
+                {isIDC && (
+                  <button
+                    onClick={downloadTimetable}
+                    title="Download timetable (CSV)"
+                    aria-label="Download timetable"
+                    className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-accent hover:text-accent dark:border-slate-700 dark:text-slate-300"
+                  >
+                    <Download size={18} />
+                  </button>
+                )}
+                {isIDC && !viewer && (
+                  <>
+                    <span className="flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-slate-500">
+                      <Check size={13} className="text-green-500" /> Auto-saved
+                    </span>
+                    <button
+                      onClick={onPublish}
+                      disabled={!canPublish}
+                      title={
+                        workflow.published
+                          ? 'Already published'
+                          : !canPublish
+                            ? 'Resolve all change requests and conflicts first'
+                            : 'Publish timetable'
+                      }
+                      className={`rounded-xl px-5 py-2.5 text-sm font-semibold transition ${
+                        workflow.published
+                          ? 'bg-ok-soft text-green-800'
+                          : canPublish
+                            ? 'bg-accent text-white hover:brightness-95'
+                            : 'cursor-not-allowed bg-slate-100 text-slate-400 dark:bg-slate-800'
+                      }`}
+                    >
+                      {workflow.published ? 'Published ✓' : 'Publish Timetable'}
+                    </button>
+                    <button
+                      onClick={() => setSharing(true)}
+                      className="rounded-xl bg-slate-100 px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200"
+                    >
+                      Share access
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </header>
 
-        {/* Status strip — slim inline badge so it doesn't eat vertical space */}
-        <div className={`shrink-0 px-8 pt-2 ${weekly ? 'hidden' : ''}`}>
-          {hardConflicts > 0 ? (
+        {/* The grid area fills a full screenful (h-full) so, once the header
+            above has scrolled off, the timetable occupies the whole viewport and
+            further scrolling drives its own internal scroll. */}
+        <div className="flex h-full min-h-0 flex-col">
+        {/* A B.Tech department reads its published timetable through the same
+            shell as the IDC planner (Select View, the pivot switch, the grid and
+            the detail drawer) — only the underlying schedule model differs. */}
+        {!termReady ? (
+          <NotImported
+            heading={`${semester} ${academicYear} isn’t imported yet`}
+            body={`Only ${SEEDED_TERM.semester} ${SEEDED_TERM.academicYear} has been mapped into the planner. Switch the term back to see a live timetable.`}
+          />
+        ) : !isIDC ? (
+          department.ready ? (
+            /* The view state is this page's, not the department's — hand it down
+               so switching department keeps you in the view you were reading. */
+            <AeroTimetable
+              viewMode={viewMode}
+              setViewMode={setViewMode}
+              view={view}
+              setView={setView}
+              weeklyMode={weeklyMode}
+              setWeeklyMode={setWeeklyMode}
+              discover={canDiscover}
+            />
+          ) : (
+            <NotImported
+              heading={`${department.name} timetable isn’t imported yet`}
+              body="This department’s course schedule hasn’t been mapped into the planner. Switch to Aerospace Engineering or Design (IDC) to see a live timetable."
+            />
+          )
+        ) : (
+        /* Below the header: the planner nav (passed in from Workspace), the
+            grid column, and the review panel — all sharing one row. */
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          {nav}
+
+          {/* Left: controls stay static; only the grid scrolls. */}
+          <div className="flex min-w-0 flex-1 flex-col">
+            {/* Status strip — slim inline badge so it doesn't eat vertical space.
+                Faculty get a prompt to raise a change request instead of the
+                coordinator's conflict / publish status; that prompt shows in the
+                weekly view too, while the sem-only conflict badges stay hidden. */}
+            <div className={`shrink-0 px-8 pt-2 ${weekly && !isFaculty ? 'hidden' : ''}`}>
+          {isFaculty ? (
+            <div className="flex items-center justify-between gap-4 py-2.5">
+              <span className="min-w-0 flex-1 text-sm text-slate-600 dark:text-slate-300">
+                Is there anything you'd like to change? If so, send a request to the department
+                timetable coordinator.
+              </span>
+              <button
+                onClick={() => setRequesting(true)}
+                className="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:brightness-95"
+              >
+                <MessageSquarePlus size={16} /> Request a change
+              </button>
+            </div>
+          ) : viewer ? null : hardConflicts > 0 ? (
             <div className="inline-flex items-center gap-1.5 rounded-md bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 dark:bg-red-950/30 dark:text-red-300">
               <AlertTriangle size={13} />
               {hardConflicts} slot conflict{hardConflicts > 1 ? 's' : ''} to resolve before publishing
@@ -371,10 +565,11 @@ export default function DraftTimetable() {
         </div>
 
         {/* View controls */}
-        <div className="flex shrink-0 items-center justify-between px-8 py-5">
+        <div className="flex shrink-0 items-center justify-between px-8 py-2.5">
           <div className="flex items-center gap-4">
-            {/* Undo / redo toolbar — sem view only (weekly view edits via its own grid) */}
-            {!weekly && (
+            {/* Undo / redo toolbar — sem view only (weekly view edits via its own
+                grid). A coordinator-only editing control. */}
+            {!weekly && !viewer && (
               <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700">
                 <button
                   onClick={undo}
@@ -409,12 +604,65 @@ export default function DraftTimetable() {
             </label>
           </div>
 
+          {/* Weekly view pivot — Student/Faculty toggle + the entity dropdown,
+              pinned to the opposite end from Select View (replaces the in-grid
+              chips). The sem view keeps its own right-hand controls below. */}
+          {weekly && (
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
+                {[
+                  { id: 'student', label: 'Student' },
+                  { id: 'faculty', label: 'Faculty' },
+                ].map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setWeeklyMode(m.id)}
+                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                      weeklyMode === m.id
+                        ? 'bg-white text-slate-900 shadow dark:bg-slate-700 dark:text-white'
+                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              {weeklyMode === 'faculty' ? (
+                <select
+                  aria-label="Select faculty"
+                  value={weeklySelected || ''}
+                  onChange={(e) => setWeeklyFaculty(e.target.value)}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+                >
+                  {facultyOptions.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  aria-label="Select batch"
+                  value={weeklySelected || ''}
+                  onChange={(e) => setWeeklyCohort(e.target.value)}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+                >
+                  {cohorts.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+
           {!weekly && (
             <div className="flex items-center gap-3">
               {placement && (
                 <span className="text-xs italic text-accent">View locked to Student during edit</span>
               )}
-              {!placement && (
+              {!placement && !viewer && (
                 <button
                   onClick={() => setHistoryOpen((v) => !v)}
                   title="View change history vs. last year's timetable"
@@ -457,7 +705,29 @@ export default function DraftTimetable() {
         {weekly ? (
           <div className="min-h-0 flex-1 overflow-auto">
             {weeklyFocus ? (
-              <WeeklyTimetable focus={weeklyFocus} courses={courses} />
+              <WeeklyTimetable
+                focus={weeklyFocus}
+                courses={courses}
+                controlled
+                mode={weeklyMode}
+                selected={weeklySelected}
+                editable={!viewer}
+                selfKey={facultyKey}
+                unavailability={unavailability}
+                onMarkUnavailable={(cells, reason) => {
+                  markUnavailable(cells, reason)
+                  pushToast({
+                    tone: 'request',
+                    title: 'Marked unavailable',
+                    msg: `${cells.length} slot${cells.length > 1 ? 's' : ''} flagged for the coordinator.`,
+                  })
+                }}
+                onClearUnavailable={clearUnavailable}
+                onRequestChange={(message) => setRequesting({ message })}
+                discover={canDiscover}
+                pickedCell={discoverCell?.key || null}
+                onPickCell={setDiscoverCell}
+              />
             ) : (
               <p className="px-8 py-16 text-center text-sm text-slate-400">
                 No courses to show yet.
@@ -471,21 +741,48 @@ export default function DraftTimetable() {
                 view={view}
                 onCellClick={onCourseClick}
                 highlightCourseId={highlight}
+                facultyHighlight={facultyKey}
                 placement={placement}
                 disputedIds={disputedIds}
+                hideConflicts={viewer}
                 previewCourse={detailsCourseId ? detailPreview : null}
-                onMoveCourses={(moves) =>
-                  updateCourses(moves.map((m) => ({ ...m.course, slots: m.slots })))
+                onMoveCourses={
+                  viewer
+                    ? undefined
+                    : (moves) => updateCourses(moves.map((m) => ({ ...m.course, slots: m.slots })))
                 }
-                trayDragCourseId={trayDrag}
-                onTrayDrop={placeFromTray}
+                trayDragCourseId={viewer ? null : trayDrag}
+                onTrayDrop={viewer ? undefined : placeFromTray}
+                facultyAvail={
+                  isFaculty && view === 'faculty'
+                    ? {
+                        columnKey: facultyKey,
+                        unavailable: semUnavailable,
+                        onMarkUnavailable: (slotIds, reason) => {
+                          markUnavailable(
+                            slotIds.map((id) => `sem#${id}`),
+                            reason,
+                          )
+                          pushToast({
+                            tone: 'request',
+                            title: 'Marked unavailable',
+                            msg: `${slotIds.length} week${slotIds.length > 1 ? 's' : ''} flagged for the coordinator.`,
+                          })
+                        },
+                        onClearUnavailable: (slotIds) =>
+                          clearUnavailable(slotIds.map((id) => `sem#${id}`)),
+                        onRequestChange: (message, courseId) =>
+                          setRequesting(courseId || { message }),
+                      }
+                    : null
+                }
               />
             </div>
 
             {/* Course tray — courses not yet mapped onto the grid, draggable onto
                 a week in their own column. Only shown while something is still
                 unmapped (no empty placeholder once everything is placed). */}
-            {!placement && unmappedCourses.length > 0 && (
+            {!placement && !viewer && unmappedCourses.length > 0 && (
               <div className="mt-3 shrink-0 rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3 dark:border-slate-800 dark:bg-slate-900/40">
                 <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
                   <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
@@ -554,10 +851,15 @@ export default function DraftTimetable() {
         )}
       </div>
 
-      {/* Single right-side panel: edit > details (sem only) > review rail.
-          The review rail (requests + clashes) is shown in BOTH sem and weekly
-          views, but only when there's actually something to review. */}
-      {edit && editCourse ? (
+      {/* Single right-side panel: course discovery > edit > details (sem only) >
+          review rail. The review rail (requests + clashes) is shown in BOTH sem
+          and weekly views, but only when there's actually something to review.
+          Viewers (faculty / students) never see it — their view is read-only.
+          Discovery leads because it's the one panel a viewer can open: a student
+          browsing what to add to a free slot. */}
+      {discoverCell ? (
+        <CourseDiscoveryPanel cell={discoverCell} onClose={() => setDiscoverCell(null)} />
+      ) : viewer ? null : edit && editCourse ? (
         <EditCoursePanel
           course={editCourse}
           request={changeRequests.find((r) => r.id === edit.requestId)}
@@ -604,8 +906,31 @@ export default function DraftTimetable() {
           onOpenCourse={openCourseDetail}
         />
       ) : null}
+        </div>
+        )}
+        </div>
+      </div>
 
       {sharing && <ShareModal onClose={() => setSharing(false)} />}
+
+      {requesting && (
+        <RequestChangeModal
+          courses={courses}
+          fromName={FACULTY_IDENTITY.name}
+          myCourseKey={facultyKey}
+          presetCourseId={typeof requesting === 'string' ? requesting : null}
+          presetMessage={requesting && typeof requesting === 'object' ? requesting.message : ''}
+          onClose={() => setRequesting(null)}
+          onSubmit={({ courseCode }) => {
+            setRequesting(null)
+            pushToast({
+              tone: 'request',
+              title: 'Change request sent',
+              msg: `${courseCode ? `${courseCode} — ` : ''}sent to the department timetable coordinator.`,
+            })
+          }}
+        />
+      )}
 
       {/* Toasts — slide up from the bottom centre */}
       <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex flex-col items-center gap-2">
@@ -636,6 +961,20 @@ export default function DraftTimetable() {
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// Shown when the scope the header asks for hasn't been mapped into the app —
+// a term with no data, or a department whose curriculum isn't imported.
+function NotImported({ heading, body }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 text-center">
+      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+        <Clock3 size={26} />
+      </div>
+      <h2 className="mt-4 text-lg font-semibold text-slate-800 dark:text-slate-100">{heading}</h2>
+      <p className="mt-1.5 max-w-md text-sm text-slate-500 dark:text-slate-400">{body}</p>
     </div>
   )
 }
