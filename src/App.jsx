@@ -1,23 +1,10 @@
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import Layout from './components/Layout.jsx'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import TopNavLayout from './components/TopNavLayout.jsx'
 import FacultyLayout from './components/FacultyLayout.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import FacultyPlaceholder from './pages/FacultyPlaceholder.jsx'
 import FacultyTimetable from './pages/FacultyTimetable.jsx'
-import MasterFlow from './pages/MasterFlow.jsx'
 import Curriculum from './pages/Curriculum.jsx'
-import Workspace from './pages/Workspace.jsx'
-import SlotGridEditor from './pages/SlotGridEditor.jsx'
-import AeroSlotGrid from './pages/AeroSlotGrid.jsx'
-import SlotSystemEditor from './pages/SlotSystemEditor.jsx'
-
-// Redirect a legacy path to its new home, preserving any query string (e.g. the
-// curriculum's deep-link into a term's timetable).
-function LegacyRedirect({ to }) {
-  const { search } = useLocation()
-  return <Navigate to={`${to}${search}`} replace />
-}
 
 export default function App() {
   return (
@@ -47,18 +34,8 @@ export default function App() {
           My IITB faculty chrome (its own full-height shell). */}
       <Route path="/faculty/timetable" element={<FacultyTimetable />} />
 
-      {/* The planner entry (legacy IITB Experience shell) + full-screen editors. */}
-      <Route element={<Layout />}>
-        <Route path="/experience" element={<MasterFlow />} />
-      </Route>
-      <Route path="/planner" element={<Workspace />} />
-      <Route path="/slot-system" element={<SlotSystemEditor />} />
-      <Route path="/slot-grid" element={<SlotGridEditor />} />
-      <Route path="/aero-slot-grid" element={<AeroSlotGrid />} />
-
-      {/* Legacy redirects → the Faculty workspace. */}
-      <Route path="/curriculum" element={<LegacyRedirect to="/faculty/curriculum" />} />
-      <Route path="/timetables" element={<LegacyRedirect to="/faculty/timetable" />} />
+      {/* Anything else → the landing dashboard. */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }
