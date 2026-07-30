@@ -5,6 +5,8 @@ import Dashboard from './pages/Dashboard.jsx'
 import FacultyPlaceholder from './pages/FacultyPlaceholder.jsx'
 import FacultyTimetable from './pages/FacultyTimetable.jsx'
 import Curriculum from './pages/Curriculum.jsx'
+import SlotGridEditor from './pages/SlotGridEditor.jsx'
+import AeroSlotGrid from './pages/AeroSlotGrid.jsx'
 
 export default function App() {
   return (
@@ -33,6 +35,11 @@ export default function App() {
       {/* Timetable lands on the planner's Master Timetable, embedded in the
           My IITB faculty chrome (its own full-height shell). */}
       <Route path="/faculty/timetable" element={<FacultyTimetable />} />
+
+      {/* Full-screen slot-grid editors — opened in their own tab from the Slot
+          Allotment step (window.open), so they carry no app chrome. */}
+      <Route path="/slot-grid" element={<SlotGridEditor />} />
+      <Route path="/aero-slot-grid" element={<AeroSlotGrid />} />
 
       {/* Anything else → the landing dashboard. */}
       <Route path="*" element={<Navigate to="/" replace />} />
